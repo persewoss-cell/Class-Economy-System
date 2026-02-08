@@ -1,0 +1,6 @@
+streamlit>=1.31
+pandas
+firebase-admin
+google-cloud-firestore
+google-cloud-core
+pytz
