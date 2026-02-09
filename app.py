@@ -3116,7 +3116,7 @@ if is_admin:
     tab_objs = st.tabs(tabs_display)
     tab_map = {name: tab_objs[i] for i, name in enumerate(tabs)}
 else:
-    # ✅ 투자 탭 노출 여부(계정 정보/활성화에서 '투자활성화' 꺼진 학생은 숨김)
+    # ✅ 투자 탭 노출 여부(invest_enabled=False 학생은 숨김)
     inv_ok = True
     try:
         if my_student_id:
@@ -4965,8 +4965,8 @@ if "👥 계정 정보/활성화" in tabs:
         import io
         sample_df = pd.DataFrame(
             [
-                {"번호": 1, "이름": "홍길동", "비밀번호": "1234", "입출금활성화": True, "투자활성화": True},
-                {"번호": 2, "이름": "김철수", "비밀번호": "2345", "입출금활성화": True, "투자활성화": False},
+                {"번호": 1, "이름": "홍길동", "비밀번호": "1234"},
+                {"번호": 2, "이름": "김철수", "비밀번호": "2345"},
             ]
         )
         bio = io.BytesIO()
@@ -4993,13 +4993,6 @@ if "👥 계정 정보/활성화" in tabs:
                     if not need_cols.issubset(set(df_up.columns)):
                         st.error("엑셀 컬럼이 부족합니다. 최소: 번호, 이름, 비밀번호")
                         st.stop()
-
-                    # 활성화 컬럼이 없으면 기본 True
-                    if "입출금활성화" not in df_up.columns:
-                        df_up["입출금활성화"] = True
-                    if "투자활성화" not in df_up.columns:
-                        df_up["투자활성화"] = True
-
                     # 현재 active 학생들 맵(번호->docid, 이름->docid)
                     cur_docs = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
                     by_no = {}
@@ -5028,17 +5021,11 @@ if "👥 계정 정보/활성화" in tabs:
                         if not name or not pin_ok(pin):
                             skipped += 1
                             continue
-
-                        io_ok = bool(r.get("입출금활성화", True))
-                        inv_ok = bool(r.get("투자활성화", True))
-
                         payload = {
                             "no": int(no),
                             "name": name,
                             "pin": pin,
                             "is_active": True,
-                            "io_enabled": io_ok,
-                            "invest_enabled": inv_ok,
                         }
 
                         # ✅ 번호 우선 업데이트, 없으면 이름으로 업데이트, 없으면 신규 생성
@@ -5052,6 +5039,8 @@ if "👥 계정 정보/활성화" in tabs:
                             db.collection("students").document().set(
                                 {
                                     **payload,
+                                    "io_enabled": True,
+                                    "invest_enabled": True,
                                     "balance": 0,
                                     "role_id": "",
                                     "created_at": firestore.SERVER_TIMESTAMP,
@@ -5091,8 +5080,6 @@ if "👥 계정 정보/활성화" in tabs:
                     "번호": no,
                     "이름": x.get("name", ""),
                     "비밀번호": x.get("pin", ""),
-                    "입출금활성화": bool(x.get("io_enabled", True)),
-                    "투자활성화": bool(x.get("invest_enabled", True)),
                 }
             )
 
@@ -5129,34 +5116,6 @@ if "👥 계정 정보/활성화" in tabs:
                     st.warning("삭제할 계정을 체크하세요.")
                 else:
                     st.session_state._delete_targets = sel["_sid"].tolist()
-
-        # 2줄: 입출금/투자 일괄 켜기/끄기
-        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-
-        with r2c1:
-            if st.button("🔌 입출금 켜기", use_container_width=True, key="io_all_on"):
-                if "입출금활성화" in st.session_state.account_df.columns:
-                    st.session_state.account_df["입출금활성화"] = True
-                st.rerun()
-
-        with r2c2:
-            if st.button("⛔ 입출금 끄기", use_container_width=True, key="io_all_off"):
-                if "입출금활성화" in st.session_state.account_df.columns:
-                    st.session_state.account_df["입출금활성화"] = False
-                st.rerun()
-
-        with r2c3:
-            if st.button("📈 투자 켜기", use_container_width=True, key="inv_all_on"):
-                if "투자활성화" in st.session_state.account_df.columns:
-                    st.session_state.account_df["투자활성화"] = True
-                st.rerun()
-
-        with r2c4:
-            if st.button("📉 투자 끄기", use_container_width=True, key="inv_all_off"):
-                if "투자활성화" in st.session_state.account_df.columns:
-                    st.session_state.account_df["투자활성화"] = False
-                st.rerun()
-
         # 삭제 확인
         if "_delete_targets" in st.session_state:
             st.warning("정말 삭제하시겠습니까?")
@@ -5203,8 +5162,6 @@ if "👥 계정 정보/활성화" in tabs:
             key="account_editor",
             column_config={
                 "선택": st.column_config.CheckboxColumn(),
-                "입출금활성화": st.column_config.CheckboxColumn(),
-                "투자활성화": st.column_config.CheckboxColumn(),
             },
         )
 
@@ -5213,7 +5170,7 @@ if "👥 계정 정보/활성화" in tabs:
         #    (행 순서 고정: 번호 기준으로 다시 정렬해서 '체크하면 아래로 내려감' 현상 최소화)
         if not df_all.empty and edited_view is not None:
             tmp = st.session_state.account_df.copy()
-            for col in ["선택", "번호", "이름", "비밀번호", "입출금활성화", "투자활성화"]:
+            for col in ["선택", "번호", "이름", "비밀번호"]:
                 if col in edited_view.columns and col in tmp.columns:
                     tmp[col] = edited_view[col].values
             tmp = tmp.sort_values(["번호", "이름"], ascending=[True, True], kind="mergesort").reset_index(drop=True)
