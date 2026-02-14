@@ -7972,7 +7972,7 @@ if "💼 직업/월급" in tabs:
             ref = db.collection("config").document("salary_payroll")
             snap = ref.get()
             if not snap.exists:
-                return {"pay_day": 25, "auto_enabled": False}
+                return {"pay_day": 17, "auto_enabled": False}
             d = snap.to_dict() or {}
             return {
                 "pay_day": int(d.get("pay_day", 25) or 25),
