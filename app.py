@@ -3908,7 +3908,7 @@ if "🏦 내 통장" in tabs:
                         st.session_state["bank_tpl_sort_panel_open"] = not st.session_state.get("bank_tpl_sort_panel_open", False)
                         st.rerun()
                 with h2:
-                    st.markdown("### 🧩 내역 템플릿 순서 정렬")
+                    st.markdown("### ↕️ 내역 템플릿 순서 정렬")
 
                 if not st.session_state.get("bank_tpl_sort_panel_open", False):
                     st.caption("펼치려면 왼쪽 화살표(▸)를 눌러주세요.")
