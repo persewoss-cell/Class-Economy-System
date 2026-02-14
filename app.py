@@ -7570,7 +7570,7 @@ if "👥 계정 정보/활성화" in tabs:
         # 📌 권한 부여 현황 표
         # -------------------------------------------------
         st.markdown("### 📌 권한 부여 현황")
-        st.caption("학생이 기존에 사용하던 유형의 탭은 관리자 기능 탭으로 구분됩니다.")
+        st.caption("학생이 기존에 사용하던 유형의 탭(괄호 안 관리자 표기)은 관리자 기능 탭으로 구분됩니다.")
 
         docs_perm2 = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
         rows_status = []
