@@ -8952,9 +8952,9 @@ if "🏛️ 국세청(국고)" in tabs:
         # 1) 상단 잔액 표시: [국고] : 00000드림
         st_res = api_get_treasury_state_cached()
         treasury_bal = int(st_res.get("balance", 0) or 0)
-        st.markdown(f"## [국고] : **{treasury_bal:,}{TREASURY_UNIT}**")
+        st.markdown(f"## 🪙국고: **{treasury_bal:,}{TREASURY_UNIT}**")
 
-        st.markdown("### [세입/세출 내역]")
+        st.markdown("### 🧾세입/세출 내역")
 
         # 2) 세입/세출 내역(최신순 표)
         led = api_list_treasury_ledger_cached(limit=300)
