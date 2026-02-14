@@ -8272,7 +8272,7 @@ if "💼 직업/월급" in tabs:
         #   - 기존 월급 자동/수동지급/공제/국고 로직은 그대로 사용됨
         # -------------------------------------------------
         st.markdown("### 🧩 직업 지정 / 회수")
-        st.caption("직업을 선택한 뒤, 학생을 선택하고 ‘고용/해제’ 버튼을 누르세요. (직업별 정원(student_count) 내에서 배정됩니다.)")
+        st.caption("직업을 선택한 뒤, 학생을 선택하고 ‘고용/해제’ 버튼을 누르세요.")
 
         # 직업 선택
         job_pick_labels = [f"{r['order']} | {r['job']} (월급 {int(r['salary'])})" for r in rows]
@@ -8282,7 +8282,7 @@ if "💼 직업/월급" in tabs:
         with assign_c1:
             sel_job_label = st.selectbox("부여할 직업 선택", job_pick_labels, key="job_assign_pick2") if job_pick_labels else None
         with assign_c2:
-            sel_students_labels = st.multiselect("대상 학생 선택(복수)", [lab for lab in acc_options if lab != "(선택 없음)"], key="job_assign_students2")
+            sel_students_labels = st.multiselect("대상 학생 선택(복수 선택 가능)", [lab for lab in acc_options if lab != "(선택 없음)"], key="job_assign_students2")
 
         btn1, btn2 = st.columns([1, 1])
         with btn1:
