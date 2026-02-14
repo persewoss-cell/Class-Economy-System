@@ -7476,7 +7476,7 @@ if "👥 계정 정보/활성화" in tabs:
             sel_kind, sel_tab_internal = opt_map.get(sel_opt_label)
         with cpb:
             sel_students = st.multiselect(
-                "대상 학생 선택(복수 가능)",
+                "대상 학생 선택(복수 선택 가능)",
                 options=list(by_label.keys()),
                 default=[],
                 key="perm_sel_students_v2",
@@ -7523,7 +7523,7 @@ if "👥 계정 정보/활성화" in tabs:
         with g2:
             btn_revoke = st.button("➖ 권한 회수", use_container_width=True, key="perm_btn_revoke_v2")
         with g3:
-            confirm_all = st.checkbox("전체 권환 선택", key="perm_confirm_revoke_all_v2")
+            confirm_all = st.checkbox("전체 권한 선택", key="perm_confirm_revoke_all_v2")
         with g4:
             btn_revoke_all = st.button(
                 "🔥 전체 권한 회수",
@@ -7570,7 +7570,7 @@ if "👥 계정 정보/활성화" in tabs:
         # 📌 권한 부여 현황 표
         # -------------------------------------------------
         st.markdown("### 📌 권한 부여 현황")
-        st.caption("students.extra_permissions의 tab:: / admin:: 값을 기준으로 표시합니다.")
+        st.caption("학생이 기존에 사용하던 유형의 탭은 관리자 기능 탭으로 구분됩니다.")
 
         docs_perm2 = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
         rows_status = []
@@ -7769,7 +7769,7 @@ if "👥 계정 정보/활성화" in tabs:
         # -------------------------------------------------
         # ✅ 상단 버튼(2줄): [전체선택/전체해제/계정삭제] + [입출금/투자 일괄]
         # -------------------------------------------------
-        st.markdown("#### 🧰 일괄 관리")
+        st.markdown("#### 👥 계정/비번 관리")
 
         # 1줄: 전체 선택/해제/삭제
         r1c1, r1c2, r1c3 = st.columns(3)
