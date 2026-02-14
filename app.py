@@ -10680,7 +10680,6 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
 
             df_rate = pd.DataFrame(table_rows)
             st.dataframe(df_rate, use_container_width=True, hide_index=True)
-            st.caption("• 이 표는 Firestore config/bank_rates 값으로 자동 반영됩니다.")
 
 # =========================
 # 10) 🗓️ 일정 (권한별 수정)
