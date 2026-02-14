@@ -14,7 +14,7 @@ import re
 # =========================
 # 설정
 # =========================
-APP_TITLE = "학급 경제 시스템 (포인트 통장 기반)"
+APP_TITLE = "🏫학급 경제 시스템🪙"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 KST = timezone(timedelta(hours=9))
@@ -34,9 +34,9 @@ st.markdown(
     @media (max-width: 768px) {
         section.main > div:first-child { padding-top: 3.2rem; }
     }
-    .block-container { padding-bottom: 2.0rem; }
+    .block-container { padding-bottom: 7.0rem; }
     @media (max-width: 768px) {
-        .block-container { padding-bottom: 6.0rem; }
+        .block-container { padding-bottom: 7.0rem; }
     }
 
     /* radio → 버튼처럼 */
@@ -558,7 +558,49 @@ div[data-testid="stExpander"] > div{
     margin-bottom: 0.35rem;
 }
 
-    </style>
+/* =========================
+   헤더(제목 줄) 중앙정렬
+   ========================= */
+div[data-testid="stDataFrame"] div[role="columnheader"],
+div[data-testid="stDataEditor"] div[role="columnheader"] {
+    justify-content: center !important;
+    text-align: center !important;
+}
+
+/* =========================
+   번호 / 이름 컬럼만 중앙정렬
+   ========================= */
+
+/* 첫 번째 컬럼 */
+div[data-testid="stDataFrame"] div[role="gridcell"]:nth-child(1),
+div[data-testid="stDataEditor"] div[role="gridcell"]:nth-child(1) {
+    justify-content: center !important;
+    text-align: center !important;
+}
+
+/* 두 번째 컬럼 */
+div[data-testid="stDataFrame"] div[role="gridcell"]:nth-child(2),
+div[data-testid="stDataEditor"] div[role="gridcell"]:nth-child(2) {
+    justify-content: center !important;
+    text-align: center !important;
+}
+    
+    /* ✅ (PATCH) Expander(개별조회 포함) 제목 글자 크기 축소 — Streamlit DOM 변화에도 먹게 넓게 타겟 */
+    details summary { font-size: 0.78rem !important; line-height: 1.2 !important; }
+    details summary * { font-size: 0.78rem !important; line-height: 1.2 !important; }
+
+    /* 일부 버전에서 summary 안에 markdown container로 감싸지는 경우 */
+    details summary div[data-testid="stMarkdownContainer"] p,
+    details summary div[data-testid="stMarkdownContainer"] span,
+    details summary p,
+    details summary span {
+        font-size: 0.78rem !important;
+        line-height: 1.2 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+</style>
     """,
     unsafe_allow_html=True,
 )
@@ -805,6 +847,72 @@ def _get_invest_summary_by_student_id(student_id: str) -> tuple[str, int]:
     except Exception:
         return ("없음", 0)
 
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _get_invest_principal_by_student_id(student_id: str) -> tuple[str, int]:
+    """
+    ✅ return (표시문구, 투자원금합계)
+    - 표시문구 예: "국어 100드림, 수학 50드림"
+    - invest_ledger: redeemed=False 항목의 invest_amount를 '원금'으로 간주해 종목별 합산
+    """
+    try:
+        sid = str(student_id)
+
+        # 1) 종목 정보 맵 (id -> name)
+        prod_name = {}
+        for d in db.collection(INV_PROD_COL).stream():
+            x = d.to_dict() or {}
+            pid = str(x.get("product_id", d.id) or d.id)
+            pname = (
+                str(x.get("name", "") or "").strip()
+                or str(x.get("label", "") or "").strip()
+                or str(x.get("title", "") or "").strip()
+                or str(x.get("subject", "") or "").strip()
+                or pid
+            )
+            prod_name[pid] = pname
+
+        # 2) 보유 장부(미환매) → 종목별 원금 합산
+        q = db.collection(INV_LEDGER_COL).where(filter=FieldFilter("student_id", "==", sid)).stream()
+        per_prod_amt = {}  # pid -> principal(sum invest_amount)
+
+        for d in q:
+            x = d.to_dict() or {}
+            if bool(x.get("redeemed", False)):
+                continue
+
+            pid = str(x.get("product_id", "") or "")
+            if not pid:
+                continue
+
+            invest_amount = int(x.get("invest_amount", 0) or 0)
+            if invest_amount <= 0:
+                continue
+
+            per_prod_amt[pid] = per_prod_amt.get(pid, 0) + invest_amount
+
+        if not per_prod_amt:
+            return ("없음", 0)
+
+        total_principal = int(sum(int(v) for v in per_prod_amt.values()))
+
+        # 표시: 종목별(내림차순) 최대 6개, 그 이상이면 상위 3개 + 외 n개
+        items = sorted(per_prod_amt.items(), key=lambda kv: kv[1], reverse=True)
+
+        shown = []
+        if len(items) <= 6:
+            for pid, v in items:
+                shown.append(f"{prod_name.get(pid, pid)} {int(v)}드림")
+        else:
+            for pid, v in items[:3]:
+                shown.append(f"{prod_name.get(pid, pid)} {int(v)}드림")
+            shown.append(f"외 {len(items)-3}개")
+
+        return (", ".join(shown), total_principal)
+
+    except Exception:
+        return ("없음", 0)
+
 def _safe_credit(student_id: str):
     """
     ✅ (score, grade) 안전 조회
@@ -845,14 +953,14 @@ def _fmt_admin_one_line(
     credit_grade: int,
 ) -> str:
     inv_text = str(inv_text or "").strip()
-    inv_part = "투자총액: 없음" if (not inv_text or inv_text == "없음") else f"투자총액: {inv_text}"
+    inv_part = "투자: 없음" if (not inv_text or inv_text == "없음") else f"투자: {inv_text}"
 
     role_part = f"직업: {str(role_name or '없음')}"
-    credit_part = f"신용등급: {int(credit_grade)}등급({int(credit_score)}점)"
+    credit_part = f"신용: {int(credit_grade)}등급({int(credit_score)}점)"
 
     return (
         f"👤 {int(no)}번 {name} | "
-        f"총자산 {int(asset_total)}드림 | 통장잔액 {int(bal_now)}드림 | 적금총액 {int(sv_total)}드림 | "
+        f"총 {int(asset_total)}드림 | 통장: {int(bal_now)}드림 | 적금: {int(sv_total)}드림 | "
         f"{inv_part} | {role_part} | {credit_part}"
     )
 
@@ -997,7 +1105,7 @@ def api_list_templates_cached():
     templates.sort(key=lambda x: (int(x.get("order", 999999)), str(x.get("label", ""))))
     return {"ok": True, "templates": templates}
 # =========================
-# ✅ (관리자) 보상/벌금/템플릿용 helpers
+# ✅ (관리자) 보상/벌금용 helpers
 # - templates 컬렉션: {label, category?, base_label?, kind, amount, order}
 # =========================
 def _parse_template_label(label: str):
@@ -1527,7 +1635,8 @@ def api_admin_add_tx_by_student_id(admin_pin: str, student_id: str, memo: str, d
     """
     ✅ 관리자 전용: 개별 학생에게 입금/출금
     - 학생 PIN 불필요
-    - 출금은 잔액 부족이어도 적용(음수 허용)
+    - 출금은 잔액 부족이면 불가 (기존 정책 유지)
+    - (국고 반영이 필요한 경우) api_admin_add_tx_by_student_id_with_treasury()를 사용
     """
     if not is_admin_pin(admin_pin):
         return {"ok": False, "error": "관리자 PIN이 틀립니다."}
@@ -1555,12 +1664,17 @@ def api_admin_add_tx_by_student_id(admin_pin: str, student_id: str, memo: str, d
         if not snap.exists:
             raise ValueError("계정을 찾지 못했습니다.")
         bal = int((snap.to_dict() or {}).get("balance", 0))
-        new_bal = bal + amount  # ✅ 음수 허용
+
+        # 출금은 잔액 부족이면 불가
+        if tx_type == "withdraw" and bal < withdraw:
+            raise ValueError("잔액보다 큰 출금은 불가합니다.")
+
+        new_bal = bal + amount
         transaction.update(student_ref, {"balance": new_bal})
         transaction.set(
             tx_ref,
             {
-                "student_id": student_id,
+                "student_id": str(student_id),
                 "type": tx_type,
                 "amount": amount,
                 "balance_after": new_bal,
@@ -1572,6 +1686,7 @@ def api_admin_add_tx_by_student_id(admin_pin: str, student_id: str, memo: str, d
 
     try:
         new_bal = _do(db.transaction())
+        api_list_accounts_cached.clear()
         return {"ok": True, "balance": new_bal}
     except ValueError as e:
         return {"ok": False, "error": str(e)}
@@ -2150,6 +2265,264 @@ def api_add_treasury_tx(admin_pin: str, memo: str, income: int, expense: int, ac
     except Exception as e:
         return {"ok": False, "error": f"국고 저장 실패: {e}"}
 
+
+
+# =========================
+# ✅ 자동 국고 반영(체크박스용)
+#   - 사용자/관리자 거래에서 "국고 반영" 체크 시 사용
+#   - 관리자 PIN 없이도 동작(수업용 편의 기능)
+# =========================
+def _treasury_apply_in_transaction(transaction, memo: str, signed_amount: int, actor: str):
+    """signed_amount: +세입 / -세출"""
+    memo = str(memo or "").strip()
+    signed_amount = int(signed_amount or 0)
+
+    if signed_amount == 0 or (not memo):
+        return
+
+    state_ref = db.collection("treasury").document("state")
+    led_ref = db.collection("treasury_ledger").document()
+
+    if signed_amount > 0:
+        tx_type = "income"
+        income = int(signed_amount)
+        expense = 0
+    else:
+        tx_type = "expense"
+        income = 0
+        expense = int(-signed_amount)
+
+    st_snap = state_ref.get(transaction=transaction)
+    cur_bal = 0
+    if st_snap.exists:
+        cur_bal = int((st_snap.to_dict() or {}).get("balance", 0) or 0)
+
+    new_bal = int(cur_bal + signed_amount)
+
+    transaction.set(
+        state_ref,
+        {
+            "balance": int(new_bal),
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        },
+        merge=True,
+    )
+    transaction.set(
+        led_ref,
+        {
+            "type": tx_type,
+            "amount": int(signed_amount),  # +세입 / -세출
+            "income": int(income),
+            "expense": int(expense),
+            "balance_after": int(new_bal),
+            "memo": memo,
+            "actor": str(actor or ""),
+            "created_at": firestore.SERVER_TIMESTAMP,
+        },
+    )
+
+
+def api_add_tx_with_treasury(name, pin, memo, deposit, withdraw, apply_treasury: bool, treasury_memo: str, actor: str = "auto"):
+    """학생 거래 + (선택)국고 반영을 한 트랜잭션에서 처리"""
+    memo = (memo or "").strip()
+    deposit = int(deposit or 0)
+    withdraw = int(withdraw or 0)
+
+    if not memo:
+        return {"ok": False, "error": "내역이 필요합니다."}
+    if (deposit > 0 and withdraw > 0) or (deposit == 0 and withdraw == 0):
+        return {"ok": False, "error": "입금/출금 중 하나만 입력하세요."}
+
+    student_doc = fs_auth_student(login_name, login_pin)  # ✅ 기존 로그인 정보 사용(원코드 유지)
+    if not student_doc:
+        return {"ok": False, "error": "이름 또는 비밀번호가 틀립니다."}
+
+    student_ref = db.collection("students").document(student_doc.id)
+    tx_ref = db.collection("transactions").document()
+
+    amount = deposit if deposit > 0 else -withdraw
+    tx_type = "deposit" if deposit > 0 else "withdraw"
+
+    # ✅ 국고 반영 금액(학생 기준)
+    # - 학생 입금  -> 국고 세출(음수)
+    # - 학생 출금  -> 국고 세입(양수)
+    tre_signed = 0
+    if bool(apply_treasury):
+        tre_signed = int(withdraw) if tx_type == "withdraw" else -int(deposit)
+
+    @firestore.transactional
+    def _do(transaction):
+        snap = student_ref.get(transaction=transaction)
+        bal = int((snap.to_dict() or {}).get("balance", 0))
+
+        # 일반 출금은 잔액 부족이면 불가
+        if tx_type == "withdraw" and bal < withdraw:
+            raise ValueError("잔액보다 큰 출금은 불가합니다.")
+
+        # ✅ 국고 반영(같은 트랜잭션) - 반드시 WRITE(학생/tx) 전에 처리(READ 먼저!)
+        if tre_signed != 0:
+            _treasury_apply_in_transaction(
+                transaction,
+                memo=str(treasury_memo or memo),
+                signed_amount=int(tre_signed),
+                actor=str(actor or "auto"),
+            )
+
+        new_bal = bal + amount
+        transaction.update(student_ref, {"balance": new_bal})
+        transaction.set(
+            tx_ref,
+            {
+                "student_id": student_doc.id,
+                "type": tx_type,
+                "amount": amount,
+                "balance_after": new_bal,
+                "memo": memo,
+                "created_at": firestore.SERVER_TIMESTAMP,
+            },
+        )
+
+        return new_bal
+
+    try:
+        new_bal = _do(db.transaction())
+        # 캐시 갱신
+        api_get_treasury_state_cached.clear()
+        api_list_treasury_ledger_cached.clear()
+        return {"ok": True, "balance": new_bal}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"저장 실패: {e}"}
+
+
+def api_admin_add_tx_by_student_id_with_treasury(admin_pin: str, student_id: str, memo: str, deposit: int, withdraw: int, apply_treasury: bool, treasury_memo: str, actor: str = "admin_auto"):
+    """관리자 개별 지급/벌금 + (선택)국고 반영"""
+    if not is_admin_pin(admin_pin):
+        return {"ok": False, "error": "관리자 PIN이 틀립니다."}
+
+    memo = (memo or "").strip()
+    deposit = int(deposit or 0)
+    withdraw = int(withdraw or 0)
+
+    if not memo:
+        return {"ok": False, "error": "내역이 필요합니다."}
+    if (deposit > 0 and withdraw > 0) or (deposit == 0 and withdraw == 0):
+        return {"ok": False, "error": "입금/출금 중 하나만 입력하세요."}
+    if not student_id:
+        return {"ok": False, "error": "student_id가 없습니다."}
+
+    student_ref = db.collection("students").document(student_id)
+    tx_ref = db.collection("transactions").document()
+
+    amount = deposit if deposit > 0 else -withdraw
+    tx_type = "deposit" if deposit > 0 else "withdraw"
+
+    tre_signed = 0
+    if bool(apply_treasury):
+        tre_signed = int(withdraw) if tx_type == "withdraw" else -int(deposit)
+
+    @firestore.transactional
+    def _do(transaction):
+        snap = student_ref.get(transaction=transaction)
+        bal = int((snap.to_dict() or {}).get("balance", 0))
+
+        # 일반 출금은 잔액 부족이면 불가
+        if tx_type == "withdraw" and bal < withdraw:
+            raise ValueError("잔액보다 큰 출금은 불가합니다.")
+
+        # ✅ 국고 반영(같은 트랜잭션) - 먼저 처리(READ 먼저, WRITE는 나중)
+        if tre_signed != 0:
+            _treasury_apply_in_transaction(
+                transaction,
+                memo=str(treasury_memo or memo),
+                signed_amount=int(tre_signed),
+                actor=str(actor or "auto"),
+            )
+
+        new_bal = bal + amount
+        transaction.update(student_ref, {"balance": new_bal})
+        transaction.set(
+            tx_ref,
+            {
+                "student_id": str(student_id),
+                "type": tx_type,
+                "amount": amount,
+                "balance_after": new_bal,
+                "memo": memo,
+                "created_at": firestore.SERVER_TIMESTAMP,
+            },
+        )
+
+        return new_bal
+
+    try:
+        new_bal = _do(db.transaction())
+        api_get_treasury_state_cached.clear()
+        api_list_treasury_ledger_cached.clear()
+        api_list_accounts_cached.clear()
+        return {"ok": True, "balance": new_bal}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"저장 실패: {e}"}
+
+
+def api_treasury_auto_bulk_adjust(memo: str, signed_amount: int, actor: str = "admin_bulk_auto"):
+    """일괄 지급/벌금 시 국고를 한 번만 합산 반영"""
+    memo = str(memo or "").strip()
+    signed_amount = int(signed_amount or 0)
+    if (not memo) or signed_amount == 0:
+        return {"ok": True}
+
+    state_ref = db.collection("treasury").document("state")
+    led_ref = db.collection("treasury_ledger").document()
+
+    if signed_amount > 0:
+        tx_type = "income"
+        income = int(signed_amount)
+        expense = 0
+    else:
+        tx_type = "expense"
+        income = 0
+        expense = int(-signed_amount)
+
+    @firestore.transactional
+    def _do(transaction):
+        st_snap = state_ref.get(transaction=transaction)
+        cur_bal = 0
+        if st_snap.exists:
+            cur_bal = int((st_snap.to_dict() or {}).get("balance", 0) or 0)
+        new_bal = int(cur_bal + signed_amount)
+
+        transaction.set(
+            state_ref,
+            {"balance": int(new_bal), "updated_at": firestore.SERVER_TIMESTAMP},
+            merge=True,
+        )
+        transaction.set(
+            led_ref,
+            {
+                "type": tx_type,
+                "amount": int(signed_amount),
+                "income": int(income),
+                "expense": int(expense),
+                "balance_after": int(new_bal),
+                "memo": memo,
+                "actor": str(actor or ""),
+                "created_at": firestore.SERVER_TIMESTAMP,
+            },
+        )
+        return new_bal
+
+    try:
+        _do(db.transaction())
+        api_get_treasury_state_cached.clear()
+        api_list_treasury_ledger_cached.clear()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": f"국고 저장 실패: {e}"}
+
 @st.cache_data(ttl=30, show_spinner=False)
 def api_list_treasury_ledger_cached(limit=300):
     q = (
@@ -2416,7 +2789,12 @@ def render_admin_trade_ui(prefix: str, templates_list: list, template_by_display
 
         st.text_input("내역", key=memo_key)
 
-        st.caption("⚡ 빠른 금액(원형 버튼)")
+        # ✅ 국고 반영(항상 사용 가능)
+        tre_key = f"{prefix}_treasury_apply"
+        st.session_state.setdefault(tre_key, True)   # ✅ 기본 체크(ON)
+        st.checkbox("국고 반영", key=tre_key)
+
+        st.caption("⚡ 빠른 금액(누른 만큼 더해지거나 줄어듬, 0은 초기화)")
         QUICK_AMOUNTS = [0, 10, 20, 50, 100, 200, 500, 1000]
 
         pick_key = f"{prefix}_quick_pick"
@@ -2619,24 +2997,55 @@ def api_list_roles_cached():
     return {"ok": True, "roles": roles}
 
 def get_my_permissions(student_id: str, is_admin: bool):
+    """로그인 계정의 최종 권한 집합을 반환합니다.
+    - 관리자: admin_all
+    - 학생: roles 기반 permissions + students.extra_permissions(개별 추가 권한)
+    """
     if is_admin:
         return {"admin_all"}
     if not student_id:
         return set()
+
     snap = db.collection("students").document(student_id).get()
     if not snap.exists:
         return set()
-    role_id = str((snap.to_dict() or {}).get("role_id", "") or "")
-    if not role_id:
-        return set()
-    rdoc = db.collection("roles").document(role_id).get()
-    if not rdoc.exists:
-        return set()
-    perms = set((rdoc.to_dict() or {}).get("permissions", []) or [])
+
+    sd = snap.to_dict() or {}
+
+    # 1) 역할(role) 기반 권한
+    perms = set()
+    role_id = str(sd.get("role_id", "") or "")
+    if role_id:
+        rdoc = db.collection("roles").document(role_id).get()
+        if rdoc.exists:
+            perms |= set((rdoc.to_dict() or {}).get("permissions", []) or [])
+
+    # 2) 학생 개별 추가 권한 (A안)
+    extra = sd.get("extra_permissions", []) or []
+    if isinstance(extra, list):
+        perms |= set([str(x) for x in extra if str(x).strip()])
+
     return perms
 
 def can(perms: set, need: str) -> bool:
     return ("admin_all" in perms) or (need in perms)
+
+
+def has_tab_access(perms: set, tab_name: str, is_admin: bool) -> bool:
+    """탭(화면) 접근 권한: 관리자이거나 students.extra_permissions에 tab::<탭이름>이 있으면 True"""
+    if is_admin:
+        return True
+    return f"tab::{tab_name}" in perms
+
+def has_admin_feature_access(perms: set, tab_name: str, is_admin: bool) -> bool:
+    """탭은 기본으로 보여도, '관리자 기능(관리 UI)'을 열어줄 때 쓰는 권한.
+    - 관리자: True
+    - 학생: students.extra_permissions에 admin::<탭이름>이 있으면 True
+    """
+    if is_admin:
+        return True
+    return f"admin::{tab_name}" in perms
+
 
 # =========================
 # 학급 확장: 초기 데이터 업로드(직업표/월급/은행금리표)
@@ -2817,12 +3226,12 @@ with st.sidebar:
     # =========================
     st.header("🔑 [학생] 비밀번호 변경")
 
-    stu_name = st.text_input("이름(계정)", key="stu_pw_name").strip()
-    old_pin = st.text_input("기존 비밀번호(4자리)", type="password", key="stu_pw_old").strip()
-    new_pin1 = st.text_input("새 비밀번호(4자리)", type="password", key="stu_pw_new1").strip()
-    new_pin2 = st.text_input("새 비밀번호(확인)", type="password", key="stu_pw_new2").strip()
+    stu_name = st.text_input("이름(계정)", key="sb_stu_pw_name").strip()
+    old_pin = st.text_input("기존 비밀번호(4자리)", type="password", key="sb_stu_pw_old").strip()
+    new_pin1 = st.text_input("새 비밀번호(4자리)", type="password", key="sb_stu_pw_new1").strip()
+    new_pin2 = st.text_input("새 비밀번호(확인)", type="password", key="sb_stu_pw_new2").strip()
 
-    if st.button("비밀번호 변경(학생)", key="stu_pw_change_btn", use_container_width=True):
+    if st.button("비밀번호 변경(학생)", key="sb_stu_pw_change_btn", use_container_width=True):
         if not stu_name:
             st.error("이름(계정)을 입력해 주세요.")
         elif not pin_ok(old_pin):
@@ -2837,10 +3246,10 @@ with st.sidebar:
             res = api_change_pin_student(stu_name, old_pin, new_pin1)
             if res.get("ok"):
                 toast("비밀번호 변경 완료!", icon="✅")
-                st.session_state.pop("stu_pw_name", None)
-                st.session_state.pop("stu_pw_old", None)
-                st.session_state.pop("stu_pw_new1", None)
-                st.session_state.pop("stu_pw_new2", None)
+                st.session_state.pop("sb_stu_pw_name", None)
+                st.session_state.pop("sb_stu_pw_old", None)
+                st.session_state.pop("sb_stu_pw_new1", None)
+                st.session_state.pop("sb_stu_pw_new2", None)
                 st.rerun()
             else:
                 st.error(res.get("error", "비밀번호 변경 실패"))
@@ -2996,7 +3405,14 @@ with st.sidebar:
 # =========================
 # Main: 로그인 (너 코드 방식 유지: form)
 # =========================
-st.subheader("🔐 로그인")
+# =========================
+# Main: 로그인 (너 코드 방식 유지: form)
+# =========================
+if st.session_state.get("logged_in", False):
+    _who = str(st.session_state.get("login_name", "") or "").strip()
+    st.subheader(f"🔐 로그인({_who})" if _who else "🔐 로그인")
+else:
+    st.subheader("🔐 로그인")
 
 if not st.session_state.logged_in:
     with st.form("login_form", clear_on_submit=False):
@@ -3040,6 +3456,10 @@ else:
         st.session_state.login_name = ""
         st.session_state.login_pin = ""
         st.session_state.undo_mode = False
+
+        # ✅ (PATCH) 개별조회 지연로딩 상태 완전 초기화 (로그아웃 후 재로그인 시 자동 로드 방지)
+        st.session_state.pop("admin_ind_view_loaded", None)
+
         st.rerun()
 
 if not st.session_state.logged_in:
@@ -3076,14 +3496,19 @@ ALL_TABS = [
 ]
 
 def tab_visible(tab_name: str):
+    # 관리자: 전부 표시
     if is_admin:
         return True
 
-    # 학생은 기본 "내 통장" + 일정(읽기)
-    if tab_name == "🏦 내 통장":
+    # 학생 기본 탭(항상 표시)
+    if tab_name in ("🏦 내 통장", "📈 투자", "🛒 구입/벌금"):
         return True
 
-    # 권한별 탭 표시
+    # ✅ 학생에게 '탭 권한(tab::<탭이름>)'이 부여된 경우 표시
+    if has_tab_access(my_perms, tab_name, is_admin=False):
+        return True
+
+    # ✅ 기존 permission 기반 표시(역할/권한 시스템 유지)
     if tab_name == "🏛️ 국세청(국고)":
         return can(my_perms, "treasury_read") or can(my_perms, "treasury_write")
     if tab_name == "📊 통계청":
@@ -3092,15 +3517,16 @@ def tab_visible(tab_name: str):
         return can(my_perms, "credit_write")
     if tab_name == "🏦 은행(적금)":
         return can(my_perms, "bank_read") or can(my_perms, "bank_write")
+    if tab_name == "💼 직업/월급":
+        return can(my_perms, "jobs_write")
+    if tab_name == "🗓️ 일정":
+        return can(my_perms, "schedule_write") or can(my_perms, "schedule_read")
 
-    if tab_name == "📈 투자":
-        return True
-    if tab_name == "🛒 구입/벌금":
-        return True
-
-    # 학생에게 숨김
-    if tab_name in ("💼 직업/월급", "👥 계정 정보/활성화"):
+    # 계정 정보/활성화는 학생에게 기본 숨김(권한 관리 UI가 있어서)
+    if tab_name == "👥 계정 정보/활성화":
         return False
+
+    return False
 
     return False
 
@@ -3112,11 +3538,11 @@ def tab_visible(tab_name: str):
 if is_admin:
     tabs = [t for t in ALL_TABS if tab_visible(t)]
     # ✅ 관리자 탭에서만 '🏦 내 통장' 탭 이름을 변경(학생 탭에는 영향 없음)
-    tabs_display = [("💰보상/벌금/템플릿" if t == "🏦 내 통장" else t) for t in tabs]
+    tabs_display = [("💰보상/벌금" if t == "🏦 내 통장" else t) for t in tabs]
     tab_objs = st.tabs(tabs_display)
     tab_map = {name: tab_objs[i] for i, name in enumerate(tabs)}
 else:
-    # ✅ 투자 탭 노출 여부(invest_enabled=False 학생은 숨김)
+    # ✅ 투자 탭 노출 여부(계정 정보/활성화에서 '투자활성화' 꺼진 학생은 숨김)
     inv_ok = True
     try:
         if my_student_id:
@@ -3126,28 +3552,66 @@ else:
     except Exception:
         inv_ok = True
 
-    # 화면 탭 라벨
-    user_tab_labels = ["📝 거래", "💰 적금"]
+    # -------------------------
+    # ✅ 학생 기본 탭(거래/적금/투자/목표)
+    # -------------------------
+    base_labels = ["📝 거래", "🏦 적금"]
     if inv_ok:
-        user_tab_labels.append("📈 투자")
-    user_tab_labels.append("🎯 목표")
+        base_labels.append("📈 투자")
+    base_labels.append("🎯 목표")
+
+    # -------------------------
+    # ✅ (추가) 관리자 권한 탭들
+    # - tab::<탭이름>  : '관리자 전용 탭'을 학생에게 추가로 열어줌
+    # - admin::<탭이름>: 기존 탭 안의 '관리자 기능 UI'를 열어줌
+    # -------------------------
+    extra_admin_tabs = []
+
+    # 1) 관리자 기능(같은 탭 안에 있던 관리자 UI)을 별도 탭으로 빼서 제공
+    #    ※ 이 탭을 만들면, 원래 탭(📝 거래/🏦 적금/📈 투자)에서는 학생에게 관리자 UI를 숨깁니다.
+    if has_admin_feature_access(my_perms, "🏦 내 통장", is_admin=False):
+        extra_admin_tabs.append(("💰보상/벌금(관리자)", "admin::🏦 내 통장"))
+
+    if has_admin_feature_access(my_perms, "🏦 은행(적금)", is_admin=False):
+        extra_admin_tabs.append(("🏦 은행(적금)(관리자)", "admin::🏦 은행(적금)"))
+
+    if inv_ok and has_admin_feature_access(my_perms, "📈 투자", is_admin=False):
+        extra_admin_tabs.append(("📈 투자(관리자)", "admin::📈 투자"))
+
+    # 2) 관리자 전용 탭(계정 정보/활성화 제외) — tab_visible() = tab::<탭이름> 권한 기반
+    for t in ALL_TABS:
+        if t in ("👥 계정 정보/활성화",):
+            continue
+        # 이미 기본 탭(거래/적금/투자)으로 구현된 것들은 제외
+        if t in ("🏦 내 통장", "🏦 은행(적금)", "📈 투자"):
+            continue
+        if tab_visible(t):
+            extra_admin_tabs.append((t, t))  # (표시라벨, 내부키)
+
+    user_tab_labels = base_labels + [lab for (lab, _k) in extra_admin_tabs]
 
     tab_objs = st.tabs(user_tab_labels)
 
-    # 아래 기존 로직(내 통장/은행/목표)을 재사용하기 위해 tab_map 키는 유지합니다.
+    # -------------------------------------------------
+    # tab_map: "내부키" -> tab object
+    # -------------------------------------------------
+    tab_map = {}
+
+    # 기본 탭(내부키는 기존 로직 재사용)
+    tab_map["🏦 내 통장"] = tab_objs[0]
+    tab_map["🏦 은행(적금)"] = tab_objs[1]
+
     if inv_ok:
-        tab_map = {
-            "🏦 내 통장": tab_objs[0],
-            "🏦 은행(적금)": tab_objs[1],
-            "📈 투자": tab_objs[2],
-            "🎯 목표": tab_objs[3],
-        }
+        tab_map["📈 투자"] = tab_objs[2]
+        tab_map["🎯 목표"] = tab_objs[3]
+        extra_start = 4
     else:
-        tab_map = {
-            "🏦 내 통장": tab_objs[0],
-            "🏦 은행(적금)": tab_objs[1],
-            "🎯 목표": tab_objs[2],
-        }
+        tab_map["🎯 목표"] = tab_objs[2]
+        extra_start = 3
+
+    # 추가 관리자 탭 매핑
+    for i, (_lab, key_internal) in enumerate(extra_admin_tabs):
+        tab_map[key_internal] = tab_objs[extra_start + i]
 
     tabs = list(tab_map.keys())
 
@@ -3184,10 +3648,10 @@ def _get_credit_cfg():
         return {"base": 50, "o": 1, "x": -3, "tri": 0}
     d = snap.to_dict() or {}
     return {
-        "base": int(d.get("base", 50) or 50),
-        "o": int(d.get("o", 1) or 1),
-        "x": int(d.get("x", -3) or -3),
-        "tri": int(d.get("tri", 0) or 0),
+        "base": int(d.get("base", 50) if d.get("base", None) is not None else 50),
+        "o": int(d.get("o", 1) if d.get("o", None) is not None else 1),
+        "x": int(d.get("x", -3) if d.get("x", None) is not None else -3),
+        "tri": int(d.get("tri", 0) if d.get("tri", None) is not None else 0),
     }
 
 def _norm_status(v) -> str:
@@ -3200,10 +3664,10 @@ def _norm_status(v) -> str:
 
 def _calc_credit_score_for_student(student_id: str):
     credit_cfg = _get_credit_cfg()
-    base = int(credit_cfg.get("base", 50) or 50)
-    o_pt = int(credit_cfg.get("o", 1) or 1)
-    x_pt = int(credit_cfg.get("x", -3) or -3)
-    tri_pt = int(credit_cfg.get("tri", 0) or 0)
+    base = int(credit_cfg.get("base", 50) if credit_cfg.get("base", None) is not None else 50)
+    o_pt = int(credit_cfg.get("o", 1) if credit_cfg.get("o", None) is not None else 1)
+    x_pt = int(credit_cfg.get("x", -3) if credit_cfg.get("x", None) is not None else -3)
+    tri_pt = int(credit_cfg.get("tri", 0) if credit_cfg.get("tri", None) is not None else 0)
 
     def _delta(v) -> int:
         v = _norm_status(v)
@@ -3293,9 +3757,10 @@ def refresh_account_data_light(name: str, pin: str, force: bool = False):
 # =========================
 if "🏦 내 통장" in tabs:
     with tab_map["🏦 내 통장"]:
-        if is_admin:
+        trade_admin_ok = bool(is_admin)  # ✅ 학생은 여기서 관리자 UI를 숨기고, 별도 관리자 탭(admin::🏦 내 통장)에서만 표시
+        if trade_admin_ok:
 
-            # ✅ (보상/벌금/템플릿) 내부 작은 탭
+            # ✅ (보상/벌금) 내부 작은 탭
             sub_tab_all, sub_tab_personal = st.tabs(["전체", "개인"])
 
             # =================================================
@@ -3325,10 +3790,21 @@ if "🏦 내 통장" in tabs:
                         elif not memo_bulk:
                             st.error("내역(메모)을 입력해 주세요.")
                         else:
+                            tre_apply_bulk = bool(st.session_state.get("admin_bulk_reward_treasury_apply", False))
+
                             if dep_bulk > 0:
                                 res = api_admin_bulk_deposit(ADMIN_PIN, dep_bulk, memo_bulk)
                                 if res.get("ok"):
                                     toast(f"일괄 지급 완료! ({res.get('count')}명)", icon="🎉")
+                                    # ✅ 국고 반영(체크 시): 전체 지급 → 국고 세출(합산)
+                                    if tre_apply_bulk:
+                                        cnt = int(res.get("count", 0) or 0)
+                                        if cnt > 0:
+                                            api_treasury_auto_bulk_adjust(
+                                                memo=f"전체 {memo_bulk}".strip(),
+                                                signed_amount=-(int(dep_bulk) * cnt),
+                                                actor="전체",
+                                            )
                                     st.rerun()
                                 else:
                                     st.error(res.get("error", "일괄 지급 실패"))
@@ -3336,6 +3812,15 @@ if "🏦 내 통장" in tabs:
                                 res = api_admin_bulk_withdraw(ADMIN_PIN, wd_bulk, memo_bulk)
                                 if res.get("ok"):
                                     toast(f"벌금 완료! (적용 {res.get('count')}명)", icon="⚠️")
+                                    # ✅ 국고 반영(체크 시): 전체 벌금 → 국고 세입(합산)
+                                    if tre_apply_bulk:
+                                        cnt = int(res.get("count", 0) or 0)
+                                        if cnt > 0:
+                                            api_treasury_auto_bulk_adjust(
+                                                memo=f"전체 {memo_bulk}".strip(),
+                                                signed_amount=(int(wd_bulk) * cnt),
+                                                actor="전체",
+                                            )
                                     st.rerun()
                                 else:
                                     st.error(res.get("error", "일괄 벌금 실패"))
@@ -3647,10 +4132,16 @@ if "🏦 내 통장" in tabs:
 
                 st.session_state.setdefault("bank_tpl_edit_id", "")
                 st.session_state.setdefault("bank_tpl_pick_prev", None)
-                st.session_state.setdefault("bank_tpl_label", "")
+
+                # ✅ 기존 bank_tpl_label 대신: base_label + category(구분)로 분리
+                st.session_state.setdefault("bank_tpl_base_label", "")
+                st.session_state.setdefault("bank_tpl_category_kr", "없음")
+
                 st.session_state.setdefault("bank_tpl_kind_setting_kr", "입금")
                 st.session_state.setdefault("bank_tpl_amount", 10)
                 st.session_state.setdefault("bank_tpl_order", 1)
+
+                CATEGORY_CHOICES = ["없음", "보상", "구입", "벌금"]
 
                 def tpl_display(t):
                     kind_kr = "입금" if t["kind"] == "deposit" else "출금"
@@ -3658,7 +4149,19 @@ if "🏦 내 통장" in tabs:
 
                 def _fill_tpl_form(t):
                     st.session_state["bank_tpl_edit_id"] = t["template_id"]
-                    st.session_state["bank_tpl_label"] = t.get("label", "")
+
+                    # ✅ category/base_label이 있으면 우선 사용, 없으면 label에서 파싱
+                    cat = str(t.get("category", "") or "").strip()
+                    base = str(t.get("base_label", "") or "").strip()
+
+                    if (not cat) and (not base):
+                        cat2, base2 = _parse_template_label(t.get("label", ""))
+                        cat = str(cat2 or "").strip()
+                        base = str(base2 or "").strip()
+
+                    st.session_state["bank_tpl_base_label"] = base
+                    st.session_state["bank_tpl_category_kr"] = cat if cat else "없음"
+
                     st.session_state["bank_tpl_kind_setting_kr"] = KIND_TO_KR.get(t.get("kind", "deposit"), "입금")
                     st.session_state["bank_tpl_amount"] = int(t.get("amount", 10) or 10)
                     st.session_state["bank_tpl_order"] = int(t.get("order", 1) or 1)
@@ -3678,9 +4181,12 @@ if "🏦 내 통장" in tabs:
                     st.session_state["bank_tpl_edit_id"] = ""
                     st.session_state["bank_tpl_pick_prev"] = None
 
-                tcol1, tcol2, tcol3 = st.columns([2, 1, 1])
+                # ✅ 컬럼: 내역이름 / 구분 / 종류 / 금액
+                tcol1, tcol_mid, tcol2, tcol3 = st.columns([2, 1.2, 1, 1])
                 with tcol1:
-                    tpl_label = st.text_input("내역 이름", key="bank_tpl_label").strip()
+                    tpl_base_label = st.text_input("내역 이름", key="bank_tpl_base_label").strip()
+                with tcol_mid:
+                    tpl_category_kr = st.selectbox("구분", CATEGORY_CHOICES, key="bank_tpl_category_kr")
                 with tcol2:
                     tpl_kind_kr = st.selectbox("종류", ["입금", "출금"], key="bank_tpl_kind_setting_kr")
                 with tcol3:
@@ -3689,12 +4195,24 @@ if "🏦 내 통장" in tabs:
                 tpl_order = st.number_input("순서(order)", min_value=1, step=1, key="bank_tpl_order")
 
                 if st.button("저장(추가/수정)", key="bank_tpl_save", use_container_width=True):
-                    if not tpl_label:
+                    if not tpl_base_label:
                         st.error("내역 이름이 필요합니다.")
                     else:
                         kind_eng = KR_TO_KIND[tpl_kind_kr]
                         tid = st.session_state.get("bank_tpl_edit_id", "") if mode == "수정" else ""
-                        res = api_admin_upsert_template(ADMIN_PIN, tid, tpl_label, kind_eng, int(tpl_amount), int(tpl_order))
+
+                        # ✅ "없음"이면 category는 빈 문자열로 저장
+                        cat = "" if str(tpl_category_kr) == "없음" else str(tpl_category_kr).strip()
+
+                        res = api_admin_upsert_template(
+                            ADMIN_PIN,
+                            tid,
+                            tpl_base_label,
+                            cat,
+                            kind_eng,
+                            int(tpl_amount),
+                            int(tpl_order),
+                        )
                         if res.get("ok"):
                             toast("템플릿 저장 완료!", icon="🧩")
                             api_list_templates_cached.clear()
@@ -3734,6 +4252,158 @@ if "🏦 내 통장" in tabs:
                                 st.session_state["bank_tpl_del_confirm"] = False
                                 st.rerun()
 
+                st.divider()
+                st.markdown("### 📥 템플릿 엑셀로 일괄 추가")
+
+                import io
+
+                # -------------------------
+                # 1) 샘플 엑셀 다운로드
+                # -------------------------
+                sample_df = pd.DataFrame(
+                    [
+                        {"내역이름": "대여료", "구분": "구입", "종류": "출금", "금액": 100, "순서": 1},
+                        {"내역이름": "칭찬스티커", "구분": "보상", "종류": "입금", "금액": 10, "순서": 2},
+                        {"내역이름": "지각", "구분": "벌금", "종류": "출금", "금액": 20, "순서": 3},
+                        {"내역이름": "기타", "구분": "없음", "종류": "입금", "금액": 5, "순서": 4},
+                    ],
+                    columns=["내역이름", "구분", "종류", "금액", "순서"],
+                )
+
+                bio = io.BytesIO()
+                with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+                    sample_df.to_excel(writer, index=False, sheet_name="templates")
+                bio.seek(0)
+
+                st.download_button(
+                    "📄 샘플 엑셀 다운로드",
+                    data=bio.getvalue(),
+                    file_name="템플릿_샘플.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="bank_tpl_sample_xlsx_download",
+                )
+
+                st.caption("• 샘플 형식: 내역이름 | 구분(없음/보상/구입/벌금) | 종류(입금/출금) | 금액 | 순서")
+                st.caption("• 엑셀을 올린 뒤, 아래의 **저장** 버튼을 눌러야 실제 반영됩니다.")
+
+                # -------------------------
+                # 2) 엑셀 업로드 + 미리보기
+                # -------------------------
+                upl = st.file_uploader(
+                    "엑셀 업로드(.xlsx)",
+                    type=["xlsx"],
+                    key="bank_tpl_bulk_xlsx",
+                    help="샘플 형식 그대로 업로드하세요. 업로드만으로는 반영되지 않고, 아래 '저장' 버튼을 눌러야 반영됩니다.",
+                )
+
+                st.session_state.setdefault("bank_tpl_bulk_df", None)
+
+                if upl is not None:
+                    try:
+                        df = pd.read_excel(upl)
+                        df = df.copy()
+
+                        # 공백 컬럼명 정리
+                        df.columns = [str(c).strip() for c in df.columns]
+
+                        need_cols = ["내역이름", "구분", "종류", "금액", "순서"]
+                        miss = [c for c in need_cols if c not in df.columns]
+                        if miss:
+                            st.error(f"필수 컬럼이 없습니다: {miss}")
+                            st.session_state["bank_tpl_bulk_df"] = None
+                        else:
+                            # 문자열/정수 정리
+                            df["내역이름"] = df["내역이름"].astype(str).str.strip()
+                            df["구분"] = df["구분"].astype(str).str.strip()
+                            df["종류"] = df["종류"].astype(str).str.strip()
+                            df["금액"] = pd.to_numeric(df["금액"], errors="coerce").fillna(0).astype(int)
+                            df["순서"] = pd.to_numeric(df["순서"], errors="coerce").fillna(999999).astype(int)
+
+                            # 기본값 보정
+                            df.loc[df["구분"].isin(["nan", "None", ""]), "구분"] = "없음"
+
+                            # 검증
+                            bad_cat = df[~df["구분"].isin(["없음", "보상", "구입", "벌금"])]
+                            bad_kind = df[~df["종류"].isin(["입금", "출금"])]
+                            bad_label = df[df["내역이름"].str.len() == 0]
+                            bad_amt = df[df["금액"] <= 0]
+
+                            if (not bad_cat.empty) or (not bad_kind.empty) or (not bad_label.empty) or (not bad_amt.empty):
+                                if not bad_label.empty:
+                                    st.error("❌ 내역이름이 비어있는 행이 있습니다.")
+                                if not bad_cat.empty:
+                                    st.error("❌ 구분 값이 잘못된 행이 있습니다. (없음/보상/구입/벌금만 가능)")
+                                if not bad_kind.empty:
+                                    st.error("❌ 종류 값이 잘못된 행이 있습니다. (입금/출금만 가능)")
+                                if not bad_amt.empty:
+                                    st.error("❌ 금액은 1 이상이어야 합니다.")
+                                st.session_state["bank_tpl_bulk_df"] = None
+                            else:
+                                st.session_state["bank_tpl_bulk_df"] = df
+                                st.success(f"업로드 완료! ({len(df)}행) 아래 미리보기 확인 후 저장을 누르세요.")
+                                st.dataframe(df, use_container_width=True, hide_index=True)
+
+                    except Exception as e:
+                        st.error(f"엑셀 읽기 실패: {e}")
+                        st.session_state["bank_tpl_bulk_df"] = None
+
+                # -------------------------
+                # 3) 저장(반영) 버튼 + (옵션) 기존 리스트 삭제
+                # -------------------------
+                del_old = st.checkbox(
+                    "저장 시 기존 템플릿 리스트를 모두 삭제하고 새로 올린 엑셀로 덮어쓰기",
+                    value=False,
+                    key="bank_tpl_bulk_delete_old",
+                )
+
+                if st.button("✅ 엑셀 내용 저장(반영)", use_container_width=True, key="bank_tpl_bulk_save_btn"):
+                    df2 = st.session_state.get("bank_tpl_bulk_df", None)
+                    if df2 is None or df2.empty:
+                        st.error("먼저 올바른 엑셀을 업로드하세요.")
+                    else:
+                        try:
+                            # 1) 기존 삭제(옵션)
+                            if del_old:
+                                docs = list(db.collection("templates").stream())
+                                batch = db.batch()
+                                for d in docs:
+                                    batch.delete(d.reference)
+                                if docs:
+                                    batch.commit()
+
+                            # 2) 엑셀 행들을 upsert(신규로 저장)
+                            saved = 0
+                            for _, r in df2.iterrows():
+                                base_label = str(r["내역이름"]).strip()
+                                cat_kr = str(r["구분"]).strip()
+                                kind_kr = str(r["종류"]).strip()
+                                amt = int(r["금액"])
+                                order = int(r["순서"])
+
+                                category = "" if cat_kr == "없음" else cat_kr
+                                kind = KR_TO_KIND.get(kind_kr, "deposit")
+
+                                res = api_admin_upsert_template(
+                                    ADMIN_PIN,
+                                    "",  # ✅ 일괄은 신규로 추가(기존과 매칭/수정은 하지 않음)
+                                    base_label,
+                                    category,
+                                    kind,
+                                    amt,
+                                    order,
+                                )
+                                if res.get("ok"):
+                                    saved += 1
+
+                            api_list_templates_cached.clear()
+                            toast(f"엑셀 저장 완료! ({saved}개 반영)", icon="📥")
+                            st.session_state["bank_tpl_bulk_df"] = None
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(f"저장 실패: {e}")
+            
             # =================================================
             # [개인] : 체크된 학생만 “일괄 지급/벌금” 적용
             # =================================================
@@ -3806,9 +4476,36 @@ if "🏦 내 통장" in tabs:
                             ok_cnt = 0
                             fail = []
 
+                            tre_apply_personal = bool(st.session_state.get("admin_personal_reward_treasury_apply", False))
+                            sid_to_disp = {}
+                            try:
+                                for _a in (accounts_now or []):
+                                    _sid = str(_a.get("student_id", "") or "")
+                                    if _sid:
+                                        _no = int(_a.get("no", 0) or 0)
+                                        _nm = str(_a.get("name", "") or "")
+                                        if _no > 0:
+                                            sid_to_disp[_sid] = f"{_no}번 {_nm}"
+                                        else:
+                                            sid_to_disp[_sid] = _nm
+                            except Exception:
+                                sid_to_disp = {}
+
                             for sid in selected_ids:
                                 # ✅ 체크된 학생만 적용 (관리자 출금은 음수 허용)
-                                res = api_admin_add_tx_by_student_id(ADMIN_PIN, sid, memo_p, int(dep_p), int(wd_p))
+                                disp_name = sid_to_disp.get(str(sid), str(sid))
+                                tre_memo = f"{disp_name} {memo_p}".strip()
+
+                                res = api_admin_add_tx_by_student_id_with_treasury(
+                                    ADMIN_PIN,
+                                    sid,
+                                    memo_p,
+                                    int(dep_p),
+                                    int(wd_p),
+                                    tre_apply_personal,
+                                    tre_memo,
+                                    actor=disp_name,
+                                )
                                 if res.get("ok"):
                                     ok_cnt += 1
                                 else:
@@ -3896,26 +4593,37 @@ if "🏦 내 통장" in tabs:
             except Exception:
                 credit_score, credit_grade = 0, 10
 
+            # 4) 투자 현재가치(종목별) + 합계
+            #    - 총자산과 '투자 금액' 표기는 원금이 아니라 '현재 주가 기준'으로 반영
+            invest_text, invest_value_total = "없음", 0
+            try:
+                invest_text, invest_value_total = _get_invest_summary_by_student_id(str(student_id))
+            except Exception:
+                invest_text, invest_value_total = "없음", 0
+
+            asset_total = int(balance + total_savings_principal + invest_value_total)
+
             st.markdown(f"## 🧾 {login_name} 통장")
 
             # ✅ 총자산만 따로 출력 (글자 살짝 크게)
             st.markdown(
-                f'<div class="total-asset">총자산: {balance + total_savings_principal}드림</div>',
+                f'<div class="total-asset">🧮 총 자산: {asset_total}드림</div>',
                 unsafe_allow_html=True
             )
 
             # 기존 요약 정보 (총자산 제외)
             st.markdown(
                 f"""
-**통장 잔액:** {balance}드림  
-**적금 금액:** {total_savings_principal}드림  
-**직업:** {job_name}  
-**신용도:** {credit_grade}등급({credit_score}점)
+**💰 통장 잔액:** {balance}드림  
+**🏦 적금 금액:** {total_savings_principal}드림  
+**📈 투자(현재 평가금액):** {invest_text}  
+**💼 직업:** {job_name}  
+**💳 신용도:** {credit_grade}등급({credit_score}점)
 """
             )
 
             # ✅ 거래 기록 (DuplicateElementKey 방지: prefix를 탭 전용으로 변경)
-            st.subheader("📝 거래 기록(통장에 찍기)")
+            st.subheader("📝 통장 기록하기")
             memo_u, dep_u, wd_u = render_admin_trade_ui(
                 prefix=f"bank_trade_{login_name}",
                 templates_list=TEMPLATES,
@@ -3935,7 +4643,36 @@ if "🏦 내 통장" in tabs:
                     elif (deposit > 0 and withdraw > 0) or (deposit == 0 and withdraw == 0):
                         st.error("입금/출금은 둘 중 하나만 입력해 주세요.")
                     else:
-                        res = api_add_tx(login_name, login_pin, memo, deposit, withdraw)
+                        # ✅ 국고 반영(체크 시): 학생 입금 → 국고 세출 / 학생 출금 → 국고 세입
+                        tre_apply = bool(st.session_state.get(f"bank_trade_{login_name}_treasury_apply", False))
+
+                        disp_name = str(login_name or "")
+                        try:
+                            if student_id:
+                                _s = db.collection("students").document(str(student_id)).get()
+                                if _s.exists:
+                                    _d = _s.to_dict() or {}
+                                    _no = int(_d.get("no", 0) or 0)
+                                    _nm = str(_d.get("name", "") or disp_name)
+                                    if _no > 0:
+                                        disp_name = f"{_no}번 {_nm}"
+                                    else:
+                                        disp_name = _nm
+                        except Exception:
+                            pass
+
+                        tre_memo = f"{disp_name} {memo}".strip()
+
+                        res = api_add_tx_with_treasury(
+                            login_name,
+                            login_pin,
+                            memo,
+                            deposit,
+                            withdraw,
+                            tre_apply,
+                            tre_memo,
+                            actor=disp_name,
+                        )
                         if res.get("ok"):
                             toast("저장 완료!", icon="✅")
 
@@ -4018,8 +4755,6 @@ if "🏦 내 통장" in tabs:
             st.subheader("📒 통장 내역(최신순)")
             render_tx_table(df_tx)
 
-
-
 # =========================
 # 📈 투자
 # =========================
@@ -4027,181 +4762,903 @@ if "🏦 내 통장" in tabs:
 # =========================
 # (관리자) 🔎 개별조회 - 번호순 expander 요약 + 상세
 # =========================
-if "🔎 개별조회" in tabs:
-    with tab_map["🔎 개별조회"]:
-        st.subheader("🔎 개별조회(번호순)")
 
-        if not is_admin:
-            st.error("관리자 전용 탭입니다.")
-            st.stop()
-
-        name_search2 = st.text_input("🔎 계정검색(이름 일부)", key="admin_ind_view_search").strip()
-
-        # ✅ students에서 번호(no) 포함해서 다시 로드(번호순 정렬)
-        docs = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
-        acc_rows = []
-        for d in docs:
-            x = d.to_dict() or {}
-            nm = str(x.get("name", "") or "").strip()
-            if not nm:
-                continue
-            if name_search2 and (name_search2 not in nm):
-                continue
-            try:
-                no = int(x.get("no", 999999) or 999999)
-            except Exception:
-                no = 999999
-            acc_rows.append(
-                {
-                    "student_id": d.id,
-                    "no": no,
-                    "name": nm,
-                    "balance": int(x.get("balance", 0) or 0),
-                }
-            )
-
-        acc_rows.sort(key=lambda r: (int(r.get("no", 999999) or 999999), str(r.get("name", ""))))
-
-        if not acc_rows:
-            st.info("표시할 계정이 없습니다.")
+# =========================
+# (학생) 💰보상/벌금(관리자) — 별도 탭 (admin::🏦 내 통장)
+# =========================
+if "admin::🏦 내 통장" in tabs:
+    with tab_map["admin::🏦 내 통장"]:
+        st.subheader("💰보상/벌금(관리자)")
+        if is_admin:
+            st.info("관리자 모드에서는 상단 '💰보상/벌금' 탭에서 사용합니다.")
         else:
-            for r in acc_rows:
-                sid = str(r["student_id"])
-                nm = str(r["name"])
-                no = int(r.get("no", 0) or 0)
-                bal_now = int(r.get("balance", 0) or 0)
 
-                # 적금
-                sres = api_savings_list_by_student_id(sid)
-                savings = sres.get("savings", []) if sres.get("ok") else []
-                sv_total = savings_active_total(savings)
-                # ✅ '적금 탭에서 보이는 원금 합계'와 동일하게: 만기/해지 제외 전부 합산
-                sv_total = sum(
-                    int(s.get("principal", 0) or 0)
-                    for s in savings
-                    if str(s.get("status", "")).lower().strip() not in ("matured", "canceled", "cancelled")
+            # ✅ (보상/벌금) 내부 작은 탭
+            sub_tab_all, sub_tab_personal = st.tabs(["전체", "개인"])
+
+            # =================================================
+            # [전체] : 기존 화면 그대로
+            # =================================================
+            with sub_tab_all:
+                # -------------------------------------------------
+                # 1) 전체 일괄 지급/벌금
+                # -------------------------------------------------
+                st.markdown("### 🎁 전체 일괄 지급/벌금")
+
+                tpl_res3 = api_list_templates_cached()
+                templates3 = tpl_res3.get("templates", []) if tpl_res3.get("ok") else []
+                tpl_by_display3 = {template_display_for_trade(t): t for t in templates3}
+
+                memo_bulk, dep_bulk, wd_bulk = render_admin_trade_ui(
+                    prefix="admin_bulk_reward",
+                    templates_list=templates3,
+                    template_by_display=tpl_by_display3,
                 )
 
-                # 투자(보유) 요약  ✅ (text, total) 로 받기
-                inv_text, inv_total = _get_invest_summary_by_student_id(sid)
-
-                # 직업(roles)
-                role_name = _get_role_name_by_student_id(sid)
-
-                # 신용등급(있으면 계산식 사용)
-                credit_score, credit_grade = _safe_credit(sid)
-
-                # 총자산(통장+적금원금+투자현재가치추정)
-                asset_total = int(bal_now) + int(sv_total) + int(inv_total)
-
-                collapsed = _fmt_admin_one_line(
-                    no=no,
-                    name=nm,
-                    asset_total=asset_total,
-                    bal_now=bal_now,
-                    sv_total=sv_total,
-                    inv_text=inv_text,      # ✅ 여기!
-                    inv_total=inv_total,
-                    role_name=role_name,
-                    credit_score=credit_score,
-                    credit_grade=credit_grade,
-                )
-
-                with st.expander(collapsed, expanded=False):
-
-                    # 통장내역(최신 120)
-                    st.markdown("### 📒 통장내역")
-                    txr = api_get_txs_by_student_id(sid, limit=120)
-                    if not txr.get("ok"):
-                        st.error(txr.get("error", "내역을 불러오지 못했어요."))
-                    else:
-                        df_tx = pd.DataFrame(txr.get("rows", []))
-                        if df_tx.empty:
-                            st.info("거래 내역이 없어요.")
+                b1, b2 = st.columns(2)
+                with b1:
+                    if st.button("저장", key="admin_bulk_reward_save", use_container_width=True):
+                        if (dep_bulk > 0 and wd_bulk > 0) or (dep_bulk == 0 and wd_bulk == 0):
+                            st.error("입금/출금은 둘 중 하나만 입력해 주세요.")
+                        elif not memo_bulk:
+                            st.error("내역(메모)을 입력해 주세요.")
                         else:
-                            df_tx = df_tx.sort_values("created_at_utc", ascending=False)
-                            render_tx_table(df_tx)
+                            tre_apply_bulk = bool(st.session_state.get("admin_bulk_reward_treasury_apply", False))
 
-if "📈 투자" in tabs:
-    with tab_map["📈 투자"]:
+                            if dep_bulk > 0:
+                                res = api_admin_bulk_deposit(ADMIN_PIN, dep_bulk, memo_bulk)
+                                if res.get("ok"):
+                                    toast(f"일괄 지급 완료! ({res.get('count')}명)", icon="🎉")
+                                    # ✅ 국고 반영(체크 시): 전체 지급 → 국고 세출(합산)
+                                    if tre_apply_bulk:
+                                        cnt = int(res.get("count", 0) or 0)
+                                        if cnt > 0:
+                                            api_treasury_auto_bulk_adjust(
+                                                memo=f"전체 {memo_bulk}".strip(),
+                                                signed_amount=-(int(dep_bulk) * cnt),
+                                                actor="전체",
+                                            )
+                                    st.rerun()
+                                else:
+                                    st.error(res.get("error", "일괄 지급 실패"))
+                            else:
+                                res = api_admin_bulk_withdraw(ADMIN_PIN, wd_bulk, memo_bulk)
+                                if res.get("ok"):
+                                    toast(f"벌금 완료! (적용 {res.get('count')}명)", icon="⚠️")
+                                    # ✅ 국고 반영(체크 시): 전체 벌금 → 국고 세입(합산)
+                                    if tre_apply_bulk:
+                                        cnt = int(res.get("count", 0) or 0)
+                                        if cnt > 0:
+                                            api_treasury_auto_bulk_adjust(
+                                                memo=f"전체 {memo_bulk}".strip(),
+                                                signed_amount=(int(wd_bulk) * cnt),
+                                                actor="전체",
+                                            )
+                                    st.rerun()
+                                else:
+                                    st.error(res.get("error", "일괄 벌금 실패"))
 
-        INV_PROD_COL = "invest_products"
-        INV_HIST_COL = "invest_price_history"
-        INV_LEDGER_COL = "invest_ledger"
+                with b2:
+                    if st.button("되돌리기(관리자)", key="admin_bulk_reward_undo_toggle", use_container_width=True):
+                        st.session_state["admin_bulk_reward_undo_mode"] = not st.session_state.get(
+                            "admin_bulk_reward_undo_mode", False
+                        )
 
-        # -------------------------
-        # 유틸(함수 대신 안전하게 inline)
-        # -------------------------
-        days_ko = ["월", "화", "수", "목", "금", "토", "일"]
+                # ✅ 되돌리기(관리자)
+                if st.session_state.get("admin_bulk_reward_undo_mode", False):
+                    st.divider()
+                    st.subheader("↩️ 선택 되돌리기(관리자)")
 
-        def _as_price1(v):
-            try:
-                return float(f"{float(v):.1f}")
-            except Exception:
-                return 0.0
+                    admin_pin_rb = st.text_input(
+                        "관리자 PIN 입력",
+                        type="password",
+                        key="admin_bulk_reward_undo_pin",
+                    ).strip()
 
-        def _ts_to_dt(v):
-            if v is None:
-                return None
-            if isinstance(v, datetime):
-                return v
-            try:
-                if hasattr(v, "to_datetime"):
-                    out = v.to_datetime()
-                    if isinstance(out, datetime):
-                        return out
-            except Exception:
-                pass
-            return None
+                    accounts_for_rb = api_list_accounts_cached().get("accounts", [])
+                    name_map = {a.get("name", ""): a.get("student_id", "") for a in (accounts_for_rb or []) if a.get("name")}
+                    pick_name = st.selectbox(
+                        "되돌릴 학생 선택",
+                        ["(선택)"] + list(name_map.keys()),
+                        key="admin_bulk_reward_undo_pick_name",
+                    )
 
-        def _fmt_kor_date_md(dt_obj):
-            if not dt_obj:
-                return "-"
-            try:
-                dt_kst = dt_obj.astimezone(KST)
-            except Exception:
-                dt_kst = dt_obj
-            try:
-                wd = days_ko[int(dt_kst.weekday())]
-            except Exception:
-                wd = ""
-            return f"{dt_kst.month}월 {dt_kst.day}일({wd})"
+                    if pick_name != "(선택)":
+                        sid_rb = name_map.get(pick_name, "")
+                        txr_rb = api_get_txs_by_student_id(sid_rb, limit=120)
+                        df_rb = pd.DataFrame(txr_rb.get("rows", [])) if txr_rb.get("ok") else pd.DataFrame()
 
-        # -------------------------
-        # 권한: 지급(회수) 가능?
-        # - 관리자 or 직업 '투자증권'
-        # -------------------------
-        def _can_redeem(actor_student_id: str) -> bool:
-            if is_admin:
-                return True
-            try:
-                if not actor_student_id:
-                    return False
-                snap = db.collection("students").document(str(actor_student_id)).get()
-                if not snap.exists:
-                    return False
-                rid = str((snap.to_dict() or {}).get("role_id", "") or "")
-                if not rid:
-                    return False
-                roles = api_list_roles_cached()
-                for r in roles:
-                    if str(r.get("role_id")) == rid:
-                        return str(r.get("role_name", "") or "") == "투자증권"
-                return False
-            except Exception:
-                return False
+                        if not df_rb.empty:
+                            view_df = df_rb.head(50).copy()
 
-        # -------------------------
-        # 장부 로드
-        # -------------------------
-        def _load_ledger(for_student_id: str | None):
-            try:
-                q = (
-                    db.collection(INV_LEDGER_COL)
-                    .order_by("buy_at", direction=firestore.Query.DESCENDING)
-                    .limit(400)
-                    .stream()
+                            def _can_rollback_row(row):
+                                if str(row.get("type", "")) == "rollback":
+                                    return False
+                                if _is_savings_memo(row.get("memo", "")) or str(row.get("type", "")) in ("maturity",):
+                                    return False
+                                return True
+
+                            view_df["가능"] = view_df.apply(_can_rollback_row, axis=1)
+
+                            selected_ids = []
+                            for _, r in view_df.iterrows():
+                                tx_id = r["tx_id"]
+                                label = f"{r['created_at_kr']} | {r['memo']} | +{int(r['deposit'])} / -{int(r['withdraw'])}"
+                                ck = st.checkbox(
+                                    label,
+                                    key=f"admin_bulk_reward_rb_ck_{sid_rb}_{tx_id}",
+                                    disabled=(not r["가능"]),
+                                )
+                                if ck and r["가능"]:
+                                    selected_ids.append(tx_id)
+
+                            if st.button("선택 항목 되돌리기", key="admin_bulk_reward_do_rb", use_container_width=True):
+                                if not is_admin_pin(admin_pin_rb):
+                                    st.error("관리자 PIN이 틀립니다.")
+                                elif not selected_ids:
+                                    st.warning("체크된 항목이 없어요.")
+                                else:
+                                    res2 = api_admin_rollback_selected(admin_pin_rb, sid_rb, selected_ids)
+                                    if res2.get("ok"):
+                                        toast(f"선택 {res2.get('undone')}건 되돌림 완료", icon="↩️")
+                                        api_list_accounts_cached.clear()
+                                        st.rerun()
+                                    else:
+                                        st.error(res2.get("error", "되돌리기 실패"))
+
+                st.divider()
+
+                # -------------------------------------------------
+                # 2) 내역 템플릿 순서 정렬
+                # -------------------------------------------------
+                h1, h2 = st.columns([0.35, 9.65], vertical_alignment="center")
+                with h1:
+                    if st.button(
+                        "▸" if not st.session_state.get("bank_tpl_sort_panel_open", False) else "▾",
+                        key="bank_tpl_sort_panel_toggle",
+                        use_container_width=True,
+                    ):
+                        st.session_state["bank_tpl_sort_panel_open"] = not st.session_state.get("bank_tpl_sort_panel_open", False)
+                        st.rerun()
+                with h2:
+                    st.markdown("### 🧩 내역 템플릿 순서 정렬")
+
+                if not st.session_state.get("bank_tpl_sort_panel_open", False):
+                    st.caption("펼치려면 왼쪽 화살표(▸)를 눌러주세요.")
+                else:
+                    tpl_res2 = api_list_templates_cached()
+                    templates = tpl_res2.get("templates", []) if tpl_res2.get("ok") else []
+                    templates = sorted(
+                        templates,
+                        key=lambda t: (int(t.get("order", 999999) or 999999), str(t.get("label", ""))),
+                    )
+                    tpl_by_id = {t["template_id"]: t for t in templates}
+
+                    st.session_state.setdefault("bank_tpl_sort_mode", False)
+                    st.session_state.setdefault("bank_tpl_work_ids", [])
+                    st.session_state.setdefault("bank_tpl_mobile_sort_ui", False)
+
+                    if not st.session_state["bank_tpl_sort_mode"]:
+                        st.session_state["bank_tpl_work_ids"] = [t["template_id"] for t in templates]
+                    else:
+                        cur_ids = [t["template_id"] for t in templates]
+                        if (not st.session_state["bank_tpl_work_ids"]) or (set(st.session_state["bank_tpl_work_ids"]) != set(cur_ids)):
+                            st.session_state["bank_tpl_work_ids"] = cur_ids
+
+                    topA, topB, topC, topD = st.columns([1.1, 1.1, 1.4, 1.6])
+                    with topA:
+                        if st.button(
+                            "정렬모드 ON" if not st.session_state["bank_tpl_sort_mode"] else "정렬모드 OFF",
+                            key="bank_tpl_sort_toggle",
+                            use_container_width=True,
+                        ):
+                            st.session_state["bank_tpl_sort_mode"] = not st.session_state["bank_tpl_sort_mode"]
+                            if not st.session_state["bank_tpl_sort_mode"]:
+                                st.session_state["bank_tpl_work_ids"] = [t["template_id"] for t in templates]
+                            st.rerun()
+                    with topB:
+                        if st.button("order 채우기(1회)", key="bank_tpl_backfill_btn", use_container_width=True):
+                            res = api_admin_backfill_template_order(ADMIN_PIN)
+                            if res.get("ok"):
+                                toast("order 초기화 완료!", icon="🧷")
+                                api_list_templates_cached.clear()
+                                st.session_state["bank_tpl_work_ids"] = []
+                                st.rerun()
+                            else:
+                                st.error(res.get("error", "실패"))
+                    with topC:
+                        if st.button("order 전체 재정렬", key="bank_tpl_normalize_btn", use_container_width=True):
+                            res = api_admin_normalize_template_order(ADMIN_PIN)
+                            if res.get("ok"):
+                                toast("order 재정렬 완료!", icon="🧹")
+                                api_list_templates_cached.clear()
+                                st.session_state["bank_tpl_work_ids"] = []
+                                st.rerun()
+                            else:
+                                st.error(res.get("error", "실패"))
+                    with topD:
+                        st.session_state["bank_tpl_mobile_sort_ui"] = st.checkbox(
+                            "간단 모드(모바일용)",
+                            value=bool(st.session_state["bank_tpl_mobile_sort_ui"]),
+                            key="bank_tpl_mobile_sort_ui_chk",
+                            help="모바일에서 표가 세로로 쌓여 보이는 문제를 피하기 위한 정렬 UI입니다.",
+                        )
+
+                    if st.session_state["bank_tpl_sort_mode"]:
+                        st.caption("✅ 이동은 화면에서만 즉시 반영 → 마지막에 ‘저장(한 번에)’ 1번 누르면 DB 반영")
+
+                    work_ids = st.session_state["bank_tpl_work_ids"]
+                    if not work_ids:
+                        st.info("템플릿이 아직 없어요.")
+                    else:
+                        if st.session_state["bank_tpl_mobile_sort_ui"]:
+                            options = list(range(len(work_ids)))
+
+                            def _opt_label(i: int):
+                                tid = work_ids[i]
+                                t = tpl_by_id.get(tid, {})
+                                kind_kr = "입금" if t.get("kind") == "deposit" else "출금"
+                                amt = int(t.get("amount", 0) or 0)
+                                return f"{i+1}. {t.get('label','')} ({kind_kr} {amt})"
+
+                            pick_i = st.selectbox(
+                                "이동할 항목 선택",
+                                options,
+                                format_func=_opt_label,
+                                key="bank_tpl_simple_pick",
+                            )
+
+                            b1, b2, b3 = st.columns([1, 1, 2])
+                            with b1:
+                                if st.button(
+                                    "위로 ▲",
+                                    key="bank_tpl_simple_up",
+                                    disabled=(not st.session_state["bank_tpl_sort_mode"]) or pick_i == 0,
+                                    use_container_width=True,
+                                ):
+                                    work_ids[pick_i - 1], work_ids[pick_i] = work_ids[pick_i], work_ids[pick_i - 1]
+                                    st.session_state["bank_tpl_work_ids"] = work_ids
+                                    st.session_state["bank_tpl_simple_pick"] = max(0, pick_i - 1)
+                                    st.rerun()
+                            with b2:
+                                if st.button(
+                                    "아래로 ▼",
+                                    key="bank_tpl_simple_dn",
+                                    disabled=(not st.session_state["bank_tpl_sort_mode"]) or pick_i == (len(work_ids) - 1),
+                                    use_container_width=True,
+                                ):
+                                    work_ids[pick_i + 1], work_ids[pick_i] = work_ids[pick_i], work_ids[pick_i + 1]
+                                    st.session_state["bank_tpl_work_ids"] = work_ids
+                                    st.session_state["bank_tpl_simple_pick"] = min(len(work_ids) - 1, pick_i + 1)
+                                    st.rerun()
+                            with b3:
+                                st.caption("정렬모드 ON일 때만 이동 가능")
+
+                            html = ["<div class='tpl-simple'>"]
+                            for idx, tid in enumerate(work_ids, start=1):
+                                t = tpl_by_id.get(tid, {})
+                                kind_kr = "입금" if t.get("kind") == "deposit" else "출금"
+                                amt = int(t.get("amount", 0) or 0)
+                                lab = str(t.get("label", "") or "")
+                                html.append(
+                                    f"<div class='item'>"
+                                    f"<span class='idx'>{idx}</span>"
+                                    f"<span class='lab'>{lab}</span>"
+                                    f"<div class='meta'>{kind_kr} · {amt}</div>"
+                                    f"</div>"
+                                )
+                            html.append("</div>")
+                            st.markdown("\n".join(html), unsafe_allow_html=True)
+
+                            if st.session_state["bank_tpl_sort_mode"]:
+                                s1, s2 = st.columns([1.2, 1.2])
+                                with s1:
+                                    if st.button("저장(한 번에)", key="bank_tpl_save_orders_btn_simple", use_container_width=True):
+                                        res = api_admin_save_template_orders(ADMIN_PIN, st.session_state["bank_tpl_work_ids"])
+                                        if res.get("ok"):
+                                            toast(f"순서 저장 완료! ({res.get('count', 0)}개)", icon="💾")
+                                            st.session_state["bank_tpl_sort_mode"] = False
+                                            api_list_templates_cached.clear()
+                                            st.session_state["bank_tpl_work_ids"] = []
+                                            st.rerun()
+                                        else:
+                                            st.error(res.get("error", "저장 실패"))
+                                with s2:
+                                    if st.button("취소(원복)", key="bank_tpl_cancel_orders_btn_simple", use_container_width=True):
+                                        st.session_state["bank_tpl_sort_mode"] = False
+                                        st.session_state["bank_tpl_work_ids"] = [t["template_id"] for t in templates]
+                                        toast("변경 취소(원복)!", icon="↩️")
+                                        st.rerun()
+                        else:
+                            head = st.columns([0.7, 5.2, 2.2, 1.4], vertical_alignment="center")
+                            head[0].markdown("<div class='tpl-head'>순서</div>", unsafe_allow_html=True)
+                            head[1].markdown("<div class='tpl-head'>내역</div>", unsafe_allow_html=True)
+                            head[2].markdown("<div class='tpl-head'>종류·금액</div>", unsafe_allow_html=True)
+                            head[3].markdown("<div class='tpl-head'>이동</div>", unsafe_allow_html=True)
+
+                            for idx, tid in enumerate(work_ids):
+                                t = tpl_by_id.get(tid, {})
+                                label = t.get("label", "")
+                                kind_kr = "입금" if t.get("kind") == "deposit" else "출금"
+                                amt = int(t.get("amount", 0) or 0)
+
+                                row = st.columns([0.7, 5.2, 2.2, 0.7, 0.7], vertical_alignment="center")
+                                row[0].markdown(f"<div class='tpl-cell'>{idx+1}</div>", unsafe_allow_html=True)
+                                row[1].markdown(
+                                    f"<div class='tpl-cell'><div class='tpl-label'>{label}</div></div>",
+                                    unsafe_allow_html=True,
+                                )
+                                row[2].markdown(
+                                    f"<div class='tpl-cell'><div class='tpl-sub'>{kind_kr} · {amt}</div></div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                                if st.session_state["bank_tpl_sort_mode"]:
+                                    up_disabled = (idx == 0)
+                                    down_disabled = (idx == len(work_ids) - 1)
+
+                                    if row[3].button("⬆", key=f"bank_tpl_up_fast_{tid}", disabled=up_disabled, use_container_width=True):
+                                        work_ids[idx - 1], work_ids[idx] = work_ids[idx], work_ids[idx - 1]
+                                        st.session_state["bank_tpl_work_ids"] = work_ids
+                                        st.rerun()
+
+                                    if row[4].button("⬇", key=f"bank_tpl_dn_fast_{tid}", disabled=down_disabled, use_container_width=True):
+                                        work_ids[idx + 1], work_ids[idx] = work_ids[idx], work_ids[idx + 1]
+                                        st.session_state["bank_tpl_work_ids"] = work_ids
+                                        st.rerun()
+                                else:
+                                    row[3].markdown("<div class='tpl-cell'></div>", unsafe_allow_html=True)
+                                    row[4].markdown("<div class='tpl-cell'></div>", unsafe_allow_html=True)
+
+                            if st.session_state["bank_tpl_sort_mode"]:
+                                s1, s2 = st.columns([1.2, 1.2])
+                                with s1:
+                                    if st.button("저장(한 번에)", key="bank_tpl_save_orders_btn", use_container_width=True):
+                                        res = api_admin_save_template_orders(ADMIN_PIN, st.session_state["bank_tpl_work_ids"])
+                                        if res.get("ok"):
+                                            toast(f"순서 저장 완료! ({res.get('count', 0)}개)", icon="💾")
+                                            st.session_state["bank_tpl_sort_mode"] = False
+                                            api_list_templates_cached.clear()
+                                            st.session_state["bank_tpl_work_ids"] = []
+                                            st.rerun()
+                                        else:
+                                            st.error(res.get("error", "저장 실패"))
+                                with s2:
+                                    if st.button("취소(원복)", key="bank_tpl_cancel_orders_btn", use_container_width=True):
+                                        st.session_state["bank_tpl_sort_mode"] = False
+                                        st.session_state["bank_tpl_work_ids"] = [t["template_id"] for t in templates]
+                                        toast("변경 취소(원복)!", icon="↩️")
+                                        st.rerun()
+
+                st.divider()
+
+                # -------------------------------------------------
+                # 3) 템플릿 추가/수정/삭제
+                # -------------------------------------------------
+                st.markdown("### 🧩 템플릿 추가/수정/삭제")
+
+                KIND_TO_KR = {"deposit": "입금", "withdraw": "출금"}
+                KR_TO_KIND = {"입금": "deposit", "출금": "withdraw"}
+
+                templates_now = api_list_templates_cached().get("templates", [])
+                mode = st.radio("작업", ["추가", "수정"], horizontal=True, key="bank_tpl_mode")
+
+                st.session_state.setdefault("bank_tpl_edit_id", "")
+                st.session_state.setdefault("bank_tpl_pick_prev", None)
+
+                # ✅ 기존 bank_tpl_label 대신: base_label + category(구분)로 분리
+                st.session_state.setdefault("bank_tpl_base_label", "")
+                st.session_state.setdefault("bank_tpl_category_kr", "없음")
+
+                st.session_state.setdefault("bank_tpl_kind_setting_kr", "입금")
+                st.session_state.setdefault("bank_tpl_amount", 10)
+                st.session_state.setdefault("bank_tpl_order", 1)
+
+                CATEGORY_CHOICES = ["없음", "보상", "구입", "벌금"]
+
+                def tpl_display(t):
+                    kind_kr = "입금" if t["kind"] == "deposit" else "출금"
+                    return f"{t['label']}[{kind_kr} {int(t['amount'])}]"
+
+                def _fill_tpl_form(t):
+                    st.session_state["bank_tpl_edit_id"] = t["template_id"]
+
+                    # ✅ category/base_label이 있으면 우선 사용, 없으면 label에서 파싱
+                    cat = str(t.get("category", "") or "").strip()
+                    base = str(t.get("base_label", "") or "").strip()
+
+                    if (not cat) and (not base):
+                        cat2, base2 = _parse_template_label(t.get("label", ""))
+                        cat = str(cat2 or "").strip()
+                        base = str(base2 or "").strip()
+
+                    st.session_state["bank_tpl_base_label"] = base
+                    st.session_state["bank_tpl_category_kr"] = cat if cat else "없음"
+
+                    st.session_state["bank_tpl_kind_setting_kr"] = KIND_TO_KR.get(t.get("kind", "deposit"), "입금")
+                    st.session_state["bank_tpl_amount"] = int(t.get("amount", 10) or 10)
+                    st.session_state["bank_tpl_order"] = int(t.get("order", 1) or 1)
+
+                if mode == "수정" and templates_now:
+                    labels = [tpl_display(t) for t in templates_now]
+                    pick = st.selectbox(
+                        "수정할 템플릿 선택",
+                        list(range(len(templates_now))),
+                        format_func=lambda idx: labels[idx],
+                        key="bank_tpl_pick",
+                    )
+                    if st.session_state["bank_tpl_pick_prev"] != pick:
+                        st.session_state["bank_tpl_pick_prev"] = pick
+                        _fill_tpl_form(templates_now[pick])
+                elif mode == "추가":
+                    st.session_state["bank_tpl_edit_id"] = ""
+                    st.session_state["bank_tpl_pick_prev"] = None
+
+                # ✅ 컬럼: 내역이름 / 구분 / 종류 / 금액
+                tcol1, tcol_mid, tcol2, tcol3 = st.columns([2, 1.2, 1, 1])
+                with tcol1:
+                    tpl_base_label = st.text_input("내역 이름", key="bank_tpl_base_label").strip()
+                with tcol_mid:
+                    tpl_category_kr = st.selectbox("구분", CATEGORY_CHOICES, key="bank_tpl_category_kr")
+                with tcol2:
+                    tpl_kind_kr = st.selectbox("종류", ["입금", "출금"], key="bank_tpl_kind_setting_kr")
+                with tcol3:
+                    tpl_amount = st.number_input("금액", min_value=1, step=1, key="bank_tpl_amount")
+
+                tpl_order = st.number_input("순서(order)", min_value=1, step=1, key="bank_tpl_order")
+
+                if st.button("저장(추가/수정)", key="bank_tpl_save", use_container_width=True):
+                    if not tpl_base_label:
+                        st.error("내역 이름이 필요합니다.")
+                    else:
+                        kind_eng = KR_TO_KIND[tpl_kind_kr]
+                        tid = st.session_state.get("bank_tpl_edit_id", "") if mode == "수정" else ""
+
+                        # ✅ "없음"이면 category는 빈 문자열로 저장
+                        cat = "" if str(tpl_category_kr) == "없음" else str(tpl_category_kr).strip()
+
+                        res = api_admin_upsert_template(
+                            ADMIN_PIN,
+                            tid,
+                            tpl_base_label,
+                            cat,
+                            kind_eng,
+                            int(tpl_amount),
+                            int(tpl_order),
+                        )
+                        if res.get("ok"):
+                            toast("템플릿 저장 완료!", icon="🧩")
+                            api_list_templates_cached.clear()
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "템플릿 저장 실패"))
+
+                st.caption("삭제")
+                if templates_now:
+                    del_labels = [tpl_display(t) for t in templates_now]
+                    del_pick = st.selectbox(
+                        "삭제할 템플릿 선택",
+                        list(range(len(templates_now))),
+                        format_func=lambda idx: del_labels[idx],
+                        key="bank_tpl_del_pick",
+                    )
+                    del_id = templates_now[del_pick]["template_id"]
+
+                    if st.button("삭제", key="bank_tpl_del_btn", use_container_width=True):
+                        st.session_state["bank_tpl_del_confirm"] = True
+
+                    if st.session_state.get("bank_tpl_del_confirm", False):
+                        st.warning("정말로 삭제하시겠습니까?")
+                        y, n = st.columns(2)
+                        with y:
+                            if st.button("예", key="bank_tpl_del_yes", use_container_width=True):
+                                res = api_admin_delete_template(ADMIN_PIN, del_id)
+                                if res.get("ok"):
+                                    toast("삭제 완료!", icon="🗑️")
+                                    st.session_state["bank_tpl_del_confirm"] = False
+                                    api_list_templates_cached.clear()
+                                    st.rerun()
+                                else:
+                                    st.error(res.get("error", "삭제 실패"))
+                        with n:
+                            if st.button("아니오", key="bank_tpl_del_no", use_container_width=True):
+                                st.session_state["bank_tpl_del_confirm"] = False
+                                st.rerun()
+
+                st.divider()
+                st.markdown("### 📥 템플릿 엑셀로 일괄 추가")
+
+                import io
+
+                # -------------------------
+                # 1) 샘플 엑셀 다운로드
+                # -------------------------
+                sample_df = pd.DataFrame(
+                    [
+                        {"내역이름": "대여료", "구분": "구입", "종류": "출금", "금액": 100, "순서": 1},
+                        {"내역이름": "칭찬스티커", "구분": "보상", "종류": "입금", "금액": 10, "순서": 2},
+                        {"내역이름": "지각", "구분": "벌금", "종류": "출금", "금액": 20, "순서": 3},
+                        {"내역이름": "기타", "구분": "없음", "종류": "입금", "금액": 5, "순서": 4},
+                    ],
+                    columns=["내역이름", "구분", "종류", "금액", "순서"],
                 )
+
+                bio = io.BytesIO()
+                with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+                    sample_df.to_excel(writer, index=False, sheet_name="templates")
+                bio.seek(0)
+
+                st.download_button(
+                    "📄 샘플 엑셀 다운로드",
+                    data=bio.getvalue(),
+                    file_name="템플릿_샘플.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="bank_tpl_sample_xlsx_download",
+                )
+
+                st.caption("• 샘플 형식: 내역이름 | 구분(없음/보상/구입/벌금) | 종류(입금/출금) | 금액 | 순서")
+                st.caption("• 엑셀을 올린 뒤, 아래의 **저장** 버튼을 눌러야 실제 반영됩니다.")
+
+                # -------------------------
+                # 2) 엑셀 업로드 + 미리보기
+                # -------------------------
+                upl = st.file_uploader(
+                    "엑셀 업로드(.xlsx)",
+                    type=["xlsx"],
+                    key="bank_tpl_bulk_xlsx",
+                    help="샘플 형식 그대로 업로드하세요. 업로드만으로는 반영되지 않고, 아래 '저장' 버튼을 눌러야 반영됩니다.",
+                )
+
+                st.session_state.setdefault("bank_tpl_bulk_df", None)
+
+                if upl is not None:
+                    try:
+                        df = pd.read_excel(upl)
+                        df = df.copy()
+
+                        # 공백 컬럼명 정리
+                        df.columns = [str(c).strip() for c in df.columns]
+
+                        need_cols = ["내역이름", "구분", "종류", "금액", "순서"]
+                        miss = [c for c in need_cols if c not in df.columns]
+                        if miss:
+                            st.error(f"필수 컬럼이 없습니다: {miss}")
+                            st.session_state["bank_tpl_bulk_df"] = None
+                        else:
+                            # 문자열/정수 정리
+                            df["내역이름"] = df["내역이름"].astype(str).str.strip()
+                            df["구분"] = df["구분"].astype(str).str.strip()
+                            df["종류"] = df["종류"].astype(str).str.strip()
+                            df["금액"] = pd.to_numeric(df["금액"], errors="coerce").fillna(0).astype(int)
+                            df["순서"] = pd.to_numeric(df["순서"], errors="coerce").fillna(999999).astype(int)
+
+                            # 기본값 보정
+                            df.loc[df["구분"].isin(["nan", "None", ""]), "구분"] = "없음"
+
+                            # 검증
+                            bad_cat = df[~df["구분"].isin(["없음", "보상", "구입", "벌금"])]
+                            bad_kind = df[~df["종류"].isin(["입금", "출금"])]
+                            bad_label = df[df["내역이름"].str.len() == 0]
+                            bad_amt = df[df["금액"] <= 0]
+
+                            if (not bad_cat.empty) or (not bad_kind.empty) or (not bad_label.empty) or (not bad_amt.empty):
+                                if not bad_label.empty:
+                                    st.error("❌ 내역이름이 비어있는 행이 있습니다.")
+                                if not bad_cat.empty:
+                                    st.error("❌ 구분 값이 잘못된 행이 있습니다. (없음/보상/구입/벌금만 가능)")
+                                if not bad_kind.empty:
+                                    st.error("❌ 종류 값이 잘못된 행이 있습니다. (입금/출금만 가능)")
+                                if not bad_amt.empty:
+                                    st.error("❌ 금액은 1 이상이어야 합니다.")
+                                st.session_state["bank_tpl_bulk_df"] = None
+                            else:
+                                st.session_state["bank_tpl_bulk_df"] = df
+                                st.success(f"업로드 완료! ({len(df)}행) 아래 미리보기 확인 후 저장을 누르세요.")
+                                st.dataframe(df, use_container_width=True, hide_index=True)
+
+                    except Exception as e:
+                        st.error(f"엑셀 읽기 실패: {e}")
+                        st.session_state["bank_tpl_bulk_df"] = None
+
+                # -------------------------
+                # 3) 저장(반영) 버튼 + (옵션) 기존 리스트 삭제
+                # -------------------------
+                del_old = st.checkbox(
+                    "저장 시 기존 템플릿 리스트를 모두 삭제하고 새로 올린 엑셀로 덮어쓰기",
+                    value=False,
+                    key="bank_tpl_bulk_delete_old",
+                )
+
+                if st.button("✅ 엑셀 내용 저장(반영)", use_container_width=True, key="bank_tpl_bulk_save_btn"):
+                    df2 = st.session_state.get("bank_tpl_bulk_df", None)
+                    if df2 is None or df2.empty:
+                        st.error("먼저 올바른 엑셀을 업로드하세요.")
+                    else:
+                        try:
+                            # 1) 기존 삭제(옵션)
+                            if del_old:
+                                docs = list(db.collection("templates").stream())
+                                batch = db.batch()
+                                for d in docs:
+                                    batch.delete(d.reference)
+                                if docs:
+                                    batch.commit()
+
+                            # 2) 엑셀 행들을 upsert(신규로 저장)
+                            saved = 0
+                            for _, r in df2.iterrows():
+                                base_label = str(r["내역이름"]).strip()
+                                cat_kr = str(r["구분"]).strip()
+                                kind_kr = str(r["종류"]).strip()
+                                amt = int(r["금액"])
+                                order = int(r["순서"])
+
+                                category = "" if cat_kr == "없음" else cat_kr
+                                kind = KR_TO_KIND.get(kind_kr, "deposit")
+
+                                res = api_admin_upsert_template(
+                                    ADMIN_PIN,
+                                    "",  # ✅ 일괄은 신규로 추가(기존과 매칭/수정은 하지 않음)
+                                    base_label,
+                                    category,
+                                    kind,
+                                    amt,
+                                    order,
+                                )
+                                if res.get("ok"):
+                                    saved += 1
+
+                            api_list_templates_cached.clear()
+                            toast(f"엑셀 저장 완료! ({saved}개 반영)", icon="📥")
+                            st.session_state["bank_tpl_bulk_df"] = None
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(f"저장 실패: {e}")
+            
+            # =================================================
+            # [개인] : 체크된 학생만 “일괄 지급/벌금” 적용
+            # =================================================
+            with sub_tab_personal:
+                st.markdown("### 👥 대상 학생 선택 (체크한 학생만 적용)")
+                accounts_now = api_list_accounts_cached().get("accounts", [])
+                import re
+
+                def _num_key(acc):
+                    name = str(acc.get("name", ""))
+                    m = re.search(r"\d+", name)
+                    if m:
+                        return int(m.group())   # 1~9 → 01~09처럼 숫자 기준 정렬
+                    return 9999                # 번호 없으면 맨 뒤
+
+                accounts_now = sorted(accounts_now, key=_num_key)
+
+                if not accounts_now:
+                    st.info("활성 계정이 없습니다.")
+                else:
+                    selected_ids = []
+                    selected_names = []
+
+                    # ✅ 5명씩 한 줄
+                    for base in range(0, len(accounts_now), 5):
+                        cols = st.columns(5)
+                        chunk = accounts_now[base : base + 5]
+                        for j in range(5):
+                            with cols[j]:
+                                if j < len(chunk):
+                                    a = chunk[j]
+                                    nm = str(a.get("name", "") or "")
+                                    sid = str(a.get("student_id", "") or "")
+                                    import re
+                                    m = re.search(r"\d+", nm)
+                                    num = m.group() if m else "?"
+
+                                    label = f"{num}번 {nm}"
+                                    ck = st.checkbox(label, key=f"admin_personal_pick_{sid}")
+                                    if ck:
+                                        selected_ids.append(sid)
+                                        selected_names.append(nm)
+                                else:
+                                    st.write("")
+
+                    if selected_names:
+                        st.caption("선택됨: " + " · ".join(selected_names))
+
+                    st.divider()
+                    st.markdown("### 🎁 개인 지급/벌금")
+
+                    tpl_res_p = api_list_templates_cached()
+                    templates_p = tpl_res_p.get("templates", []) if tpl_res_p.get("ok") else []
+                    tpl_by_display_p = {template_display_for_trade(t): t for t in templates_p}
+
+                    memo_p, dep_p, wd_p = render_admin_trade_ui(
+                        prefix="admin_personal_reward",
+                        templates_list=templates_p,
+                        template_by_display=tpl_by_display_p,
+                    )
+
+                    if st.button("저장", key="admin_personal_reward_save", use_container_width=True):
+                        if not selected_ids:
+                            st.warning("먼저 적용할 학생을 체크해 주세요.")
+                        elif (dep_p > 0 and wd_p > 0) or (dep_p == 0 and wd_p == 0):
+                            st.error("입금/출금은 둘 중 하나만 입력해 주세요.")
+                        elif not memo_p:
+                            st.error("내역(메모)을 입력해 주세요.")
+                        else:
+                            ok_cnt = 0
+                            fail = []
+
+                            tre_apply_personal = bool(st.session_state.get("admin_personal_reward_treasury_apply", False))
+                            sid_to_disp = {}
+                            try:
+                                for _a in (accounts_now or []):
+                                    _sid = str(_a.get("student_id", "") or "")
+                                    if _sid:
+                                        _no = int(_a.get("no", 0) or 0)
+                                        _nm = str(_a.get("name", "") or "")
+                                        if _no > 0:
+                                            sid_to_disp[_sid] = f"{_no}번 {_nm}"
+                                        else:
+                                            sid_to_disp[_sid] = _nm
+                            except Exception:
+                                sid_to_disp = {}
+
+                            for sid in selected_ids:
+                                # ✅ 체크된 학생만 적용 (관리자 출금은 음수 허용)
+                                disp_name = sid_to_disp.get(str(sid), str(sid))
+                                tre_memo = f"{disp_name} {memo_p}".strip()
+
+                                res = api_admin_add_tx_by_student_id_with_treasury(
+                                    ADMIN_PIN,
+                                    sid,
+                                    memo_p,
+                                    int(dep_p),
+                                    int(wd_p),
+                                    tre_apply_personal,
+                                    tre_memo,
+                                    actor=disp_name,
+                                )
+                                if res.get("ok"):
+                                    ok_cnt += 1
+                                else:
+                                    fail.append(res.get("error", "저장 실패"))
+
+                            if ok_cnt > 0:
+                                toast(f"개인 적용 완료! ({ok_cnt}명)", icon="✅")
+                                api_list_accounts_cached.clear()
+                                st.rerun()
+                            else:
+                                st.error("적용 실패: " + (fail[0] if fail else "알 수 없는 오류"))
+
+
+# =========================
+# 📈 투자 (공용 렌더: 관리자 탭과 투자(관리자) 탭을 동일 코드로 처리)
+# =========================
+# =========================
+# 📈 투자 (공용 렌더: 관리자 탭과 투자(관리자) 탭을 동일 코드로 처리)
+# =========================
+def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, my_student_id, login_name, login_pin):
+    """관리자 투자 화면을 동일하게 렌더링(권한 학생의 투자(관리자) 탭에서도 동일 UI/기능)."""
+    # ✅ 이 함수 내부에서는 is_admin 값을 force_is_admin으로 "가상" 설정해서
+    #    관리자 화면 분기(학생용 UI 숨김 등)가 관리자와 동일하게 동작하게 한다.
+    is_admin = bool(force_is_admin)
+    inv_admin_ok = bool(inv_admin_ok_flag)  # ✅ 관리자 기능 실행 허용 여부(권한)
+    
+    INV_PROD_COL = "invest_products"
+    INV_HIST_COL = "invest_price_history"
+    INV_LEDGER_COL = "invest_ledger"
+    
+    
+    # ✅ (PATCH) 투자 탭 - 종목별 '주가 변동 내역' 표 글자/패딩 축소 전용 CSS
+    st.markdown(
+        """
+        <style>
+        table.inv_hist_table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            line-height: 1.15;
+        }
+        table.inv_hist_table th, table.inv_hist_table td {
+            padding: 6px 8px;
+            border: 1px solid rgba(0,0,0,0.08);
+            vertical-align: middle;
+        }
+        table.inv_hist_table th {
+            font-weight: 700;
+            background: rgba(0,0,0,0.03);
+            text-align: center;  /* ✅ 제목셀만 중앙정렬 */
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# -------------------------
+    # 유틸(함수 대신 안전하게 inline)
+    # -------------------------
+    days_ko = ["월", "화", "수", "목", "금", "토", "일"]
+    
+    def _as_price1(v):
+        try:
+            return float(f"{float(v):.1f}")
+        except Exception:
+            return 0.0
+    
+    def _ts_to_dt(v):
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v
+        try:
+            if hasattr(v, "to_datetime"):
+                out = v.to_datetime()
+                if isinstance(out, datetime):
+                    return out
+        except Exception:
+            pass
+        return None
+    
+    def _fmt_kor_date_md(dt_obj):
+        if not dt_obj:
+            return "-"
+        try:
+            dt_kst = dt_obj.astimezone(KST)
+        except Exception:
+            dt_kst = dt_obj
+        try:
+            wd = days_ko[int(dt_kst.weekday())]
+        except Exception:
+            wd = ""
+        return f"{dt_kst.month}월 {dt_kst.day}일({wd})"
+    
+    # -------------------------
+    # 권한: 지급(회수) 가능?
+    # - 관리자 or 직업 '투자증권'
+    # -------------------------
+    def _can_redeem(actor_student_id: str) -> bool:
+        if inv_admin_ok:
+            return True
+        try:
+            if not actor_student_id:
+                return False
+            snap = db.collection("students").document(str(actor_student_id)).get()
+            if not snap.exists:
+                return False
+            rid = str((snap.to_dict() or {}).get("role_id", "") or "")
+            if not rid:
+                return False
+            roles = api_list_roles_cached()
+            for r in roles:
+                if str(r.get("role_id")) == rid:
+                    return str(r.get("role_name", "") or "") == "투자증권"
+            return False
+        except Exception:
+            return False
+    
+    # -------------------------
+    # 장부 로드
+    # -------------------------
+    def _load_ledger(for_student_id: str | None):
+        try:
+            q = (
+                db.collection(INV_LEDGER_COL)
+                .order_by("buy_at", direction=firestore.Query.DESCENDING)
+                .limit(400)
+                .stream()
+            )
+            rows = []
+            for d in q:
+                x = d.to_dict() or {}
+                if for_student_id and str(x.get("student_id")) != str(for_student_id):
+                    continue
+                rows.append({**x, "_doc_id": d.id})
+            return rows
+        except Exception:
+            # fallback(인덱스 등)
+            try:
+                q = db.collection(INV_LEDGER_COL).limit(400).stream()
                 rows = []
                 for d in q:
                     x = d.to_dict() or {}
@@ -4210,713 +5667,1036 @@ if "📈 투자" in tabs:
                     rows.append({**x, "_doc_id": d.id})
                 return rows
             except Exception:
-                # fallback(인덱스 등)
-                try:
-                    q = db.collection(INV_LEDGER_COL).limit(400).stream()
-                    rows = []
-                    for d in q:
-                        x = d.to_dict() or {}
-                        if for_student_id and str(x.get("student_id")) != str(for_student_id):
-                            continue
-                        rows.append({**x, "_doc_id": d.id})
-                    return rows
-                except Exception:
-                    return []
-
-        # -------------------------
-        # 주가 변동 내역 로드 (표용)
-        # -------------------------
-        def _get_history(product_id: str, limit=120):
-            pid = str(product_id)
-            out = []
-            # 1) 인덱스 OK일 때
-            try:
-                q = (
-                    db.collection(INV_HIST_COL)
-                    .where(filter=FieldFilter("product_id", "==", pid))
-                    .order_by("created_at", direction=firestore.Query.DESCENDING)
-                    .limit(int(limit))
-                    .stream()
-                )
-                for d in q:
-                    x = d.to_dict() or {}
-                    out.append(
-                        {
-                            "created_at": x.get("created_at"),
-                            "reason": str(x.get("reason", "") or "").strip(),
-                            "price_before": _as_price1(x.get("price_before", x.get("price", 0.0))),
-                            "price_after": _as_price1(x.get("price_after", x.get("price", 0.0))),
-                        }
-                    )
-                return out
-            except Exception:
-                pass
-
-            # 2) fallback
-            try:
-                q = (
-                    db.collection(INV_HIST_COL)
-                    .where(filter=FieldFilter("product_id", "==", pid))
-                    .limit(int(limit))
-                    .stream()
-                )
-                for d in q:
-                    x = d.to_dict() or {}
-                    out.append(
-                        {
-                            "created_at": x.get("created_at"),
-                            "reason": str(x.get("reason", "") or "").strip(),
-                            "price_before": _as_price1(x.get("price_before", x.get("price", 0.0))),
-                            "price_after": _as_price1(x.get("price_after", x.get("price", 0.0))),
-                        }
-                    )
-                out.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
-                return out
-            except Exception:
                 return []
-
-        # -------------------------
-        # 종목 로드
-        # -------------------------
-        def _get_products(active_only=True):
-            try:
-                q = db.collection(INV_PROD_COL)
-                if active_only:
-                    q = q.where(filter=FieldFilter("is_active", "==", True))
-                docs = q.stream()
-                out = []
-                for d in docs:
-                    x = d.to_dict() or {}
-                    nm = str(x.get("name", "") or "").strip()
-                    if not nm:
-                        continue
-                    out.append(
-                        {
-                            "product_id": d.id,
-                            "name": nm,
-                            "current_price": _as_price1(x.get("current_price", 0.0)),
-                            "is_active": bool(x.get("is_active", True)),
-                        }
-                    )
-                out.sort(key=lambda r: r["name"])
-                return out
-            except Exception:
-                return []
-
-        # -------------------------
-        # 회수 계산(÷10)
-        # -------------------------
-        def _calc_redeem_amount(invest_amount: int, buy_price: float, sell_price: float):
-            invest_amount = int(invest_amount or 0)
-            buy_price = _as_price1(buy_price)
-            sell_price = _as_price1(sell_price)
-            diff = _as_price1(sell_price - buy_price)
-
-            # diff <= -100 : 전액 손실
-            if diff <= -100:
-                profit = -invest_amount
-                redeem_amt = 0
-            else:
-                profit = invest_amount * float(diff) / 10.0  # ✅ 나누기 10
-                redeem_amt = invest_amount + profit
-                if redeem_amt < 0:
-                    redeem_amt = 0
-
-            return diff, profit, int(round(redeem_amt))
-
-        # -------------------------------------------------
-        # 1) (상단) 종목 및 주가 변동
-        # -------------------------------------------------
-        st.markdown("### 📈 종목 및 주가 변동")
-
-        # (사용자) 상단 요약: 현재 잔액 / 투자 총액
-        if not is_admin:
-            cur_bal = 0
-            try:
-                if my_student_id:
-                    s = db.collection("students").document(str(my_student_id)).get()
-                    if s.exists:
-                        cur_bal = int((s.to_dict() or {}).get("balance", 0) or 0)
-            except Exception:
-                cur_bal = 0
-
-            inv_total = 0
-            try:
-                my_rows = _load_ledger(my_student_id)
-                inv_total = sum(
-                    int(r.get("invest_amount", 0) or 0)
-                    for r in my_rows
-                    if not bool(r.get("redeemed", False))
-                )
-            except Exception:
-                inv_total = 0
-
-            cA, cB = st.columns(2, gap="small")
-            with cA:
-                st.markdown(f"**현재 잔액:** {cur_bal}드림")
-            with cB:
-                st.markdown(f"**투자 총액:** {inv_total}드림")
-            st.divider()
-
-        products = _get_products(active_only=True)
-        if not products:
-            st.info("등록된 투자 종목이 없습니다. (관리자) 아래에서 종목을 먼저 추가해 주세요.")
-        else:
-            for p in products:
-                nm = p["name"]
-                cur = p["current_price"]
-                st.markdown(f"- **{nm}** (현재주가 **{cur:.1f}**)")
-
-                if is_admin:
-                    with st.expander(f"{nm} 주가 변동 반영", expanded=False):
-                        c1, c2, c3 = st.columns([3.2, 2.2, 1.2], gap="small")
-                        with c1:
-                            reason = st.text_input("변동 사유", key=f"inv_reason_{p['product_id']}")
-                        with c2:
-                            new_price = st.number_input(
-                                "주가",
-                                min_value=0.0,
-                                max_value=999.9,
-                                step=0.1,
-                                format="%.1f",
-                                value=float(cur),
-                                key=f"inv_price_{p['product_id']}",
-                            )
-                        with c3:
-                            save_btn = st.button("저장", use_container_width=True, key=f"inv_save_{p['product_id']}")
-
-                        if save_btn:
-                            reason2 = str(reason or "").strip()
-                            if not reason2:
-                                st.warning("변동 사유를 입력해 주세요.")
-                            else:
-                                try:
-                                    payload = {
-                                        "product_id": p["product_id"],
-                                        "reason": reason2,
-                                        "price_before": _as_price1(cur),
-                                        "price_after": _as_price1(new_price),
-                                        "created_at": firestore.SERVER_TIMESTAMP,
-                                    }
-                                    db.collection(INV_HIST_COL).document().set(payload)
-                                    db.collection(INV_PROD_COL).document(p["product_id"]).set(
-                                        {"current_price": _as_price1(new_price), "updated_at": firestore.SERVER_TIMESTAMP},
-                                        merge=True,
-                                    )
-                                    toast("주가가 반영되었습니다.", icon="✅")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"저장 실패: {e}")
-
-                        # 변동 내역(표)
-                        hist = _get_history(p["product_id"], limit=120)
-                        if hist:
-                            rows = []
-                            for h in hist:
-                                dt = _ts_to_dt(h.get("created_at"))
-                                pb = float(h.get("price_before", 0.0) or 0.0)
-                                pa = float(h.get("price_after", 0.0) or 0.0)
-                                diff = round(pa - pb, 1)
-
-                                # 변동일시: 0월 0일(요일) 오전/오후 00시 00분
-                                def _fmt_kor_datetime(dt_obj):
-                                    if not dt_obj:
-                                        return "-"
-                                    try:
-                                        dt_kst = dt_obj.astimezone(KST)
-                                    except Exception:
-                                        dt_kst = dt_obj
-
-                                    hour = dt_kst.hour
-                                    ampm = "오전" if hour < 12 else "오후"
-                                    hh = hour if 1 <= hour <= 12 else (hour - 12 if hour > 12 else 12)
-                                    return f"{dt_kst.month}월 {dt_kst.day}일({days_ko[dt_kst.weekday()]}) {ampm} {hh:02d}시 {dt_kst.minute:02d}분"
-
-                                # 주가 등락 표시 (요청: 하락은 파란 아이콘+파란 글씨)
-                                if diff > 0:
-                                    diff_view = f"<span style='color:red'>▲ +{diff:.1f}</span>"
-                                elif diff < 0:
-                                    diff_view = f"<span style='color:blue'>▼ {diff:.1f}</span>"
-                                else:
-                                    diff_view = "-"
-
-                                rows.append(
-                                    {
-                                        "변동일시": _fmt_kor_datetime(dt),
-                                        "변동사유": h.get("reason", "") or "",
-                                        "주가": f"{pa:.1f}",          # ✅ '변동 후' → '주가'
-                                        "주가 등락": diff_view,
-                                    }
-                                )
-
-                            df = pd.DataFrame(rows)
-
-                            # ✅ 표(왼쪽) + 꺾은선 그래프(오른쪽)
-                            left, right = st.columns([1.7, 2.2], gap="large")
-
-                            with left:
-                                st.markdown(
-                                    df.to_html(escape=False, index=False),
-                                    unsafe_allow_html=True,
-                                )
-
-                            with right:
-                                # 가로: 변동사유 / 세로: 변동 후(주가)
-                                chart_rows = []
-
-                                # ✅ 초기주가 1점 추가
-                                # - 변동 기록이 있으면: 가장 오래된 기록의 price_before가 '초기주가'
-                                # - 변동 기록이 없으면: 현재주가를 초기로 표시
-                                init_price = None
-                                if hist:
-                                    oldest = hist[-1]  # hist는 최신순이라 마지막이 가장 오래됨
-                                    init_price = float(oldest.get("price_before", 0.0) or 0.0)
-                                if init_price is None:
-                                    init_price = float(p.get("current_price", 0.0) or 0.0)
-
-                                chart_rows.append({"변동사유": "시작주가", "변동 후": round(init_price, 1)})
-
-                                # ✅ 이후 변동(오래된→최신)
-                                for h2 in reversed(hist):
-                                    reason2 = str(h2.get("reason", "") or "").strip() or "-"
-                                    pa2 = float(h2.get("price_after", 0.0) or 0.0)
-                                    chart_rows.append({"변동사유": reason2, "변동 후": round(pa2, 1)})
-
-                                cdf = pd.DataFrame(chart_rows)
-
-                                if not cdf.empty:
-                                    order = cdf["변동사유"].tolist()
-
-                                    chart = (
-                                        alt.Chart(cdf)
-                                        .mark_line(point=True)
-                                        .encode(
-                                            x=alt.X(
-                                                "변동사유:N",
-                                                sort=order,
-                                                title=None,
-                                                axis=alt.Axis(labelAngle=0),  # ✅ 글자 회전 제거
-                                            ),
-                                            y=alt.Y(
-                                                "변동 후:Q",
-                                                title=None,
-                                                scale=alt.Scale(domain=[50, 100]),  # ✅ 50~100 고정
-                                            ),
-                                            tooltip=["변동사유", "변동 후"],
-                                        )
-                                        .properties(height=260)
-                                    )
-                                    st.altair_chart(chart, use_container_width=True)
-                                else:
-                                    st.caption("그래프 데이터가 없습니다.")
-
-                        else:
-                            st.caption("아직 주가 변동 기록이 없습니다.")
-
-                else:
-                    with st.expander(f"{nm} 주가 변동 내역", expanded=False):
-                        # 변동 내역(표)
-                        hist = _get_history(p["product_id"], limit=120)
-                        if hist:
-                            rows = []
-                            for h in hist:
-                                dt = _ts_to_dt(h.get("created_at"))
-                                pb = float(h.get("price_before", 0.0) or 0.0)
-                                pa = float(h.get("price_after", 0.0) or 0.0)
-                                diff = round(pa - pb, 1)
-
-                                # 변동일시: 0월 0일(요일) 오전/오후 00시 00분
-                                def _fmt_kor_datetime(dt_obj):
-                                    if not dt_obj:
-                                        return "-"
-                                    try:
-                                        dt_kst = dt_obj.astimezone(KST)
-                                    except Exception:
-                                        dt_kst = dt_obj
-
-                                    hour = dt_kst.hour
-                                    ampm = "오전" if hour < 12 else "오후"
-                                    hh = hour if 1 <= hour <= 12 else (hour - 12 if hour > 12 else 12)
-                                    return f"{dt_kst.month}월 {dt_kst.day}일({days_ko[dt_kst.weekday()]}) {ampm} {hh:02d}시 {dt_kst.minute:02d}분"
-
-                                # 주가 등락 표시 (요청: 하락은 파란 아이콘+파란 글씨)
-                                if diff > 0:
-                                    diff_view = f"<span style='color:red'>▲ +{diff:.1f}</span>"
-                                elif diff < 0:
-                                    diff_view = f"<span style='color:blue'>▼ {diff:.1f}</span>"
-                                else:
-                                    diff_view = "-"
-
-                                rows.append(
-                                    {
-                                        "변동일시": _fmt_kor_datetime(dt),
-                                        "변동사유": h.get("reason", "") or "",
-                                        "주가": f"{pa:.1f}",          # ✅ '변동 후' → '주가'
-                                        "주가 등락": diff_view,
-                                    }
-                                )
-
-                            df = pd.DataFrame(rows)
-
-                            # ✅ 표(왼쪽) + 꺾은선 그래프(오른쪽)
-                            left, right = st.columns([1.7,2.2], gap="large")
-
-                            with left:
-                                st.markdown(
-                                    df.to_html(escape=False, index=False),
-                                    unsafe_allow_html=True,
-                                )
-
-                            with right:
-                                # 가로: 변동사유 / 세로: 변동 후(주가)
-                                chart_rows = []
-
-                                # ✅ 초기주가 1점 추가
-                                # - 변동 기록이 있으면: 가장 오래된 기록의 price_before가 '초기주가'
-                                # - 변동 기록이 없으면: 현재주가를 초기로 표시
-                                init_price = None
-                                if hist:
-                                    oldest = hist[-1]  # hist는 최신순이라 마지막이 가장 오래됨
-                                    init_price = float(oldest.get("price_before", 0.0) or 0.0)
-                                if init_price is None:
-                                    init_price = float(p.get("current_price", 0.0) or 0.0)
-
-                                chart_rows.append({"변동사유": "시작주가", "변동 후": round(init_price, 1)})
-
-                                # ✅ 이후 변동(오래된→최신)
-                                for h2 in reversed(hist):
-                                    reason2 = str(h2.get("reason", "") or "").strip() or "-"
-                                    pa2 = float(h2.get("price_after", 0.0) or 0.0)
-                                    chart_rows.append({"변동사유": reason2, "변동 후": round(pa2, 1)})
-
-                                cdf = pd.DataFrame(chart_rows)
-
-                                if not cdf.empty:
-                                    order = cdf["변동사유"].tolist()
-
-                                    chart = (
-                                        alt.Chart(cdf)
-                                        .mark_line(point=True)
-                                        .encode(
-                                            x=alt.X(
-                                                "변동사유:N",
-                                                sort=order,
-                                                title=None,
-                                                axis=alt.Axis(labelAngle=0),  # ✅ 글자 회전 제거
-                                            ),
-                                            y=alt.Y(
-                                                "변동 후:Q",
-                                                title=None,
-                                                scale=alt.Scale(domain=[50, 100]),  # ✅ 50~100 고정
-                                            ),
-                                            tooltip=["변동사유", "변동 후"],
-                                        )
-                                        .properties(height=260)
-                                    )
-                                    st.altair_chart(chart, use_container_width=True)
-                                else:
-                                    st.caption("그래프 데이터가 없습니다.")
-
-                        else:
-                            st.caption("아직 주가 변동 기록이 없습니다.")
-
-        st.divider()
-
-        # -------------------------------------------------
-        # 2) 투자 상품 관리 장부
-        # -------------------------------------------------
-        st.markdown("### 🧾 투자 상품 관리 장부")
-
-        ledger_rows = _load_ledger(None if is_admin else my_student_id)
-
-        view_rows = []
-        for x in ledger_rows:
-            redeemed = bool(x.get("redeemed", False))
-            view_rows.append(
-                {
-                    "번호": int(x.get("no", 0) or 0),
-                    "이름": str(x.get("name", "") or ""),
-                    "종목": str(x.get("product_name", "") or ""),
-                    "매입일자": str(x.get("buy_date_label", "") or ""),
-                    "매입 주가": f"{_as_price1(x.get('buy_price', 0.0)):.1f}",
-                    "투자 금액": int(x.get("invest_amount", 0) or 0),
-                    "지급완료": "✅" if redeemed else "",
-                    "매수일자": str(x.get("sell_date_label", "") or ""),
-                    "매수 주가": f"{_as_price1(x.get('sell_price', 0.0)):.1f}" if redeemed else "",
-                    "주가차이": f"{_as_price1(x.get('diff', 0.0)):.1f}" if redeemed else "",
-                    "수익/손실금": int(round(float(x.get("profit", 0.0) or 0.0))) if redeemed else "",
-                    "찾을 금액": int(x.get("redeem_amount", 0) or 0) if redeemed else "",
-                    "_doc_id": x.get("_doc_id"),
-                    "_student_id": x.get("student_id"),
-                    "_product_id": x.get("product_id"),
-                    "_buy_price": x.get("buy_price"),
-                    "_invest_amount": x.get("invest_amount"),
-                }
+    
+    # -------------------------
+    # 주가 변동 내역 로드 (표용)
+    # -------------------------
+    def _get_history(product_id: str, limit=120):
+        pid = str(product_id)
+        out = []
+        # 1) 인덱스 OK일 때
+        try:
+            q = (
+                db.collection(INV_HIST_COL)
+                .where(filter=FieldFilter("product_id", "==", pid))
+                .order_by("created_at", direction=firestore.Query.DESCENDING)
+                .limit(int(limit))
+                .stream()
             )
-
-        if view_rows:
-            st.dataframe(pd.DataFrame(view_rows).drop(columns=["_doc_id","_student_id","_product_id","_buy_price","_invest_amount"], errors="ignore"),
-                         use_container_width=True, hide_index=True)
+            for d in q:
+                x = d.to_dict() or {}
+                out.append(
+                    {
+                        "created_at": x.get("created_at"),
+                        "reason": str(x.get("reason", "") or "").strip(),
+                        "price_before": _as_price1(x.get("price_before", x.get("price", 0.0))),
+                        "price_after": _as_price1(x.get("price_after", x.get("price", 0.0))),
+                    }
+                )
+            return out
+        except Exception:
+            pass
+    
+        # 2) fallback
+        try:
+            q = (
+                db.collection(INV_HIST_COL)
+                .where(filter=FieldFilter("product_id", "==", pid))
+                .limit(int(limit))
+                .stream()
+            )
+            for d in q:
+                x = d.to_dict() or {}
+                out.append(
+                    {
+                        "created_at": x.get("created_at"),
+                        "reason": str(x.get("reason", "") or "").strip(),
+                        "price_before": _as_price1(x.get("price_before", x.get("price", 0.0))),
+                        "price_after": _as_price1(x.get("price_after", x.get("price", 0.0))),
+                    }
+                )
+            out.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+            return out
+        except Exception:
+            return []
+    
+    # -------------------------
+    # 종목 로드
+    # -------------------------
+    def _get_products(active_only=True):
+        try:
+            q = db.collection(INV_PROD_COL)
+            if active_only:
+                q = q.where(filter=FieldFilter("is_active", "==", True))
+            docs = q.stream()
+            out = []
+            for d in docs:
+                x = d.to_dict() or {}
+                nm = str(x.get("name", "") or "").strip()
+                if not nm:
+                    continue
+                out.append(
+                    {
+                        "product_id": d.id,
+                        "name": nm,
+                        "current_price": _as_price1(x.get("current_price", 0.0)),
+                        "is_active": bool(x.get("is_active", True)),
+                    }
+                )
+            out.sort(key=lambda r: r["name"])
+            return out
+        except Exception:
+            return []
+    
+    # -------------------------
+    # 회수 계산(÷10)
+    # -------------------------
+    def _calc_redeem_amount(invest_amount: int, buy_price: float, sell_price: float):
+        invest_amount = int(invest_amount or 0)
+        buy_price = _as_price1(buy_price)
+        sell_price = _as_price1(sell_price)
+        diff = _as_price1(sell_price - buy_price)
+    
+        # diff <= -100 : 전액 손실
+        if diff <= -100:
+            profit = -invest_amount
+            redeem_amt = 0
         else:
-            st.caption("투자 내역이 없습니다.")
+            profit = invest_amount * float(diff) / 10.0  # ✅ 나누기 10
+            redeem_amt = invest_amount + profit
+            if redeem_amt < 0:
+                redeem_amt = 0
+    
+        return diff, profit, int(round(redeem_amt))
+    
+    # -------------------------------------------------
+    # 1) (상단) 종목 및 주가 변동
+    # -------------------------------------------------
+    st.markdown("### 📈 종목 및 주가 변동")
+    
+    # (사용자) 상단 요약: 통장 잔액 / 투자 원금 / 현재 평가
+    if not is_admin:
+        # 1) 통장 잔액
+        cur_bal = 0
+        try:
+            if my_student_id:
+                s = db.collection("students").document(str(my_student_id)).get()
+                if s.exists:
+                    cur_bal = int((s.to_dict() or {}).get("balance", 0) or 0)
+        except Exception:
+            cur_bal = 0
 
-        # -------------------------------------------------
-        # 2-1) 지급(회수) 처리
-        # -------------------------------------------------
-        pending = [x for x in view_rows if not any([x.get("지급완료") == "✅"])]
-        if pending:
-            st.markdown("#### 💸 투자 회수(지급)")
-            can_redeem_now = _can_redeem(my_student_id)
-            if (not is_admin) and (not can_redeem_now):
-                st.info("투자 회수는 관리자 또는 '투자증권' 직업 학생만 할 수 있어요.")
-            else:
-                for x in pending[:100]:
-                    doc_id = str(x.get("_doc_id", "") or "")
-                    sid = str(x.get("_student_id", "") or "")
-                    pid = str(x.get("_product_id", "") or "")
-                    buy_price = _as_price1(x.get("_buy_price", 0.0))
-                    invest_amt = int(x.get("_invest_amount", 0) or 0)
-                    prod_name = str(x.get("종목", "") or "")
+        # 2) 투자 원금 / 현재 평가
+        principal_total = 0
+        eval_total = 0
+        principal_by_name = {}
+        eval_by_name = {}
 
-                    # 현재 주가 찾기
-                    cur_price = buy_price
-                    for p in products:
-                        if str(p["product_id"]) == pid:
-                            cur_price = _as_price1(p["current_price"])
-                            break
+        def _add_sum(d, k, v):
+            d[k] = int(d.get(k, 0) or 0) + int(v or 0)
 
-                    diff, profit, redeem_amt = _calc_redeem_amount(invest_amt, buy_price, cur_price)
+        def _fmt_breakdown(d):
+            items = []
+            for k in sorted(d.keys()):
+                v = int(d.get(k, 0) or 0)
+                if v > 0:
+                    items.append(f"{k} {v}드림")
+            return ", ".join(items) if items else "없음"
 
-                    c1, c2, c3, c4 = st.columns([1.2, 2.2, 2.8, 1.2], gap="small")
-                    with c1:
-                        st.markdown(f"**{x.get('번호','')}**")
-                    with c2:
-                        st.markdown(f"{x.get('이름','')}")
-                        st.caption(prod_name)
-                    with c3:
-                        st.caption(f"매입 {buy_price:.1f} → 현재 {cur_price:.1f} (차이 {diff:.1f})")
-                        st.caption(f"수익/손실 {profit:.1f} | 찾을 금액 {redeem_amt}")
-                    with c4:
-                        if st.button("지급", use_container_width=True, key=f"inv_pay_{doc_id}"):
+        try:
+            prods_now = _get_products(active_only=True)
+            price_by_id = {str(p["product_id"]): float(p.get("current_price", 0.0) or 0.0) for p in prods_now}
+            name_by_id = {str(p["product_id"]): str(p.get("name", "") or "") for p in prods_now}
 
-                            sell_dt = datetime.now(tz=KST)
-                            sell_label = _fmt_kor_date_md(sell_dt)
-                            memo = f"투자 회수({prod_name})"
+            my_rows = _load_ledger(my_student_id)
 
-                            if is_admin:
-                                res = api_admin_add_tx_by_student_id(
-                                    admin_pin=ADMIN_PIN,
-                                    student_id=sid,
-                                    memo=memo,
-                                    deposit=int(redeem_amt),
-                                    withdraw=0,
-                                )
-                            else:
-                                res = api_broker_deposit_by_student_id(
-                                    actor_student_id=my_student_id,
-                                    student_id=sid,
-                                    memo=memo,
-                                    deposit=int(redeem_amt),
-                                )
+            for r in my_rows:
+                if bool(r.get("redeemed", False)):
+                    continue
 
-                            if res.get("ok"):
-                                try:
-                                    db.collection(INV_LEDGER_COL).document(doc_id).set(
-                                        {
-                                            "redeemed": True,
-                                            "sell_at": firestore.SERVER_TIMESTAMP,
-                                            "sell_date_label": sell_label,
-                                            "sell_price": _as_price1(cur_price),
-                                            "diff": _as_price1(diff),
-                                            "profit": float(profit),
-                                            "redeem_amount": int(redeem_amt),
-                                        },
-                                        merge=True,
-                                    )
-                                    toast("지급 완료!", icon="✅")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"장부 업데이트 실패: {e}")
-                            else:
-                                st.error(res.get("error", "지급 실패"))
+                amt = int(r.get("invest_amount", 0) or 0)
+                if amt <= 0:
+                    continue
 
+                pid = str(r.get("product_id", "") or "")
+                nm = str(r.get("product_name", "") or "").strip()
+                if not nm:
+                    nm = str(name_by_id.get(pid, "") or "").strip()
+                if not nm:
+                    nm = "미지정"
+
+                buy_price = float(r.get("buy_price", 0.0) or 0.0)
+                cur_price = float(price_by_id.get(pid, 0.0) or 0.0)
+
+                # ✅ 현재 평가(거래 탭 기준): 투자금 * (현재가/매입가)
+                if buy_price > 0 and cur_price > 0:
+                    cur_val = amt * (cur_price / buy_price)
+                else:
+                    cur_val = amt
+
+                _add_sum(principal_by_name, nm, amt)
+                _add_sum(eval_by_name, nm, int(round(cur_val)))
+
+            principal_total = sum(principal_by_name.values())
+            eval_total = sum(eval_by_name.values())
+
+        except Exception:
+            principal_total = 0
+            eval_total = 0
+            principal_by_name = {}
+            eval_by_name = {}
+
+        st.markdown(f"**💰 통장 잔액:** {cur_bal}드림")
+        st.markdown(f"**🪙 투자 원금:** 총 {principal_total}드림({_fmt_breakdown(principal_by_name)})")
+        st.markdown(f"**📈 현재 평가:** 총 {eval_total}드림({_fmt_breakdown(eval_by_name)})")
         st.divider()
 
-        # -------------------------------------------------
-        # 3) (사용자) 투자 실행
-        # -------------------------------------------------
-        if not is_admin:
-            st.markdown("### 💳 투자하기")
+    
+    products = _get_products(active_only=True)
+    if not products:
+        st.info("등록된 투자 종목이 없습니다. (관리자) 아래에서 종목을 먼저 추가해 주세요.")
+    else:
+        for p in products:
+            nm = p["name"]
+            cur = p["current_price"]
+            st.markdown(f"- **{nm}** (현재주가 **{cur:.1f}**)")
+    
+            if inv_admin_ok:
+                with st.expander(f"{nm} 주가 변동 반영", expanded=False):
+                    c1, c2, c3 = st.columns([3.2, 2.2, 1.2], gap="small")
+                    with c1:
+                        reason = st.text_input("변동 사유", key=f"inv_reason_{p['product_id']}")
+                    with c2:
+                        new_price = st.number_input(
+                            "주가",
+                            min_value=0.0,
+                            max_value=999.9,
+                            step=0.1,
+                            format="%.1f",
+                            value=float(cur),
+                            key=f"inv_price_{p['product_id']}",
+                        )
+                    with c3:
+                        save_btn = st.button("저장", use_container_width=True, key=f"inv_save_{p['product_id']}")
+    
+                    if save_btn:
+                        reason2 = str(reason or "").strip()
+                        if not reason2:
+                            st.warning("변동 사유를 입력해 주세요.")
+                        else:
+                            try:
+                                payload = {
+                                    "product_id": p["product_id"],
+                                    "reason": reason2,
+                                    "price_before": _as_price1(cur),
+                                    "price_after": _as_price1(new_price),
+                                    "created_at": firestore.SERVER_TIMESTAMP,
+                                }
+                                db.collection(INV_HIST_COL).document().set(payload)
+                                db.collection(INV_PROD_COL).document(p["product_id"]).set(
+                                    {"current_price": _as_price1(new_price), "updated_at": firestore.SERVER_TIMESTAMP},
+                                    merge=True,
+                                )
+                                toast("주가가 반영되었습니다.", icon="✅")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"저장 실패: {e}")
+    
+                    # 변동 내역(표)
+                    hist = _get_history(p["product_id"], limit=120)
+                    if hist:
+                        rows = []
+                        for h in hist:
+                            dt = _ts_to_dt(h.get("created_at"))
+                            pb = float(h.get("price_before", 0.0) or 0.0)
+                            pa = float(h.get("price_after", 0.0) or 0.0)
+                            diff = round(pa - pb, 1)
+    
+                            # 변동일시: 0월 0일(요일) 오전/오후 00시 00분
+                            def _fmt_kor_datetime(dt_obj):
+                                if not dt_obj:
+                                    return "-"
+                                try:
+                                    dt_kst = dt_obj.astimezone(KST)
+                                except Exception:
+                                    dt_kst = dt_obj
+    
+                                hour = dt_kst.hour
+                                ampm = "오전" if hour < 12 else "오후"
+                                hh = hour if 1 <= hour <= 12 else (hour - 12 if hour > 12 else 12)
+                                return f"{dt_kst.month}월 {dt_kst.day}일({days_ko[dt_kst.weekday()]}) {ampm} {hh:02d}시 {dt_kst.minute:02d}분"
+    
+                            # 주가 등락 표시 (요청: 하락은 파란 아이콘+파란 글씨)
+                            if diff > 0:
+                                diff_view = f"<span style='color:red'>▲ +{diff:.1f}</span>"
+                            elif diff < 0:
+                                diff_view = f"<span style='color:blue'>▼ {diff:.1f}</span>"
+                            else:
+                                diff_view = "-"
+    
+                            rows.append(
+                                {
+                                    "변동일시": _fmt_kor_datetime(dt),
+                                    "변동사유": h.get("reason", "") or "",
+                                    "주가": f"{pa:.1f}",          # ✅ '변동 후' → '주가'
+                                    "주가 등락": diff_view,
+                                }
+                            )
+    
+                        df = pd.DataFrame(rows)
+    
+                        # ✅ 표(왼쪽) + 꺾은선 그래프(오른쪽)
+                        left, right = st.columns([1.7, 2.2], gap="large")
+    
+                        with left:
+                            st.markdown(
+                                df.to_html(escape=False, index=False, classes="inv_hist_table"),
+                                unsafe_allow_html=True,
+                            )
+    
+                        with right:
+                            # 가로: 변동사유 / 세로: 변동 후(주가)
+                            chart_rows = []
+    
+                            # ✅ 초기주가 1점 추가
+                            # - 변동 기록이 있으면: 가장 오래된 기록의 price_before가 '초기주가'
+                            # - 변동 기록이 없으면: 현재주가를 초기로 표시
+                            init_price = None
+                            if hist:
+                                oldest = hist[-1]  # hist는 최신순이라 마지막이 가장 오래됨
+                                init_price = float(oldest.get("price_before", 0.0) or 0.0)
+                            if init_price is None:
+                                init_price = float(p.get("current_price", 0.0) or 0.0)
+    
+                            chart_rows.append({"변동사유": "시작주가", "변동 후": round(init_price, 1)})
+    
+                            # ✅ 이후 변동(오래된→최신)
+                            for h2 in reversed(hist):
+                                reason2 = str(h2.get("reason", "") or "").strip() or "-"
+                                pa2 = float(h2.get("price_after", 0.0) or 0.0)
+                                chart_rows.append({"변동사유": reason2, "변동 후": round(pa2, 1)})
+    
+                            cdf = pd.DataFrame(chart_rows)
+    
+                            if not cdf.empty:
+                                order = cdf["변동사유"].tolist()
+    
+                                chart_df = cdf.copy().reset_index(drop=True)
 
-            inv_ok2 = True
-            try:
-                snap = db.collection("students").document(str(my_student_id)).get()
-                if snap.exists:
-                    inv_ok2 = bool((snap.to_dict() or {}).get("invest_enabled", True))
-            except Exception:
-                inv_ok2 = True
 
-            if not inv_ok2:
-                st.warning("이 계정은 현재 투자 기능이 비활성화되어 있어요.")
-            elif not products:
-                st.info("투자 종목이 아직 없어요. 관리자에게 종목 추가를 요청해 주세요.")
+    
+                                # ✅ (PATCH) 구간별 상승/하락/보합 색상 + 점(회색) 표시
+
+    
+                                chart_df["prev_price"] = chart_df["변동 후"].shift(1)
+
+
+    
+                                def _dir(_row):
+
+    
+                                    p = _row.get("prev_price")
+
+    
+                                    v = _row.get("변동 후")
+
+    
+                                    if pd.isna(p) or pd.isna(v):
+
+    
+                                        return "same"
+
+    
+                                    if v > p:
+
+    
+                                        return "up"
+
+    
+                                    if v < p:
+
+    
+                                        return "down"
+
+    
+                                    return "same"
+
+
+    
+                                chart_df["direction"] = chart_df.apply(_dir, axis=1)
+
+    
+                                chart_df["x2"] = chart_df["변동사유"].shift(-1)
+
+    
+                                chart_df["y2"] = chart_df["변동 후"].shift(-1)
+
+    
+                                seg_df = chart_df.dropna(subset=["x2"]).copy()
+
+                                # ✅ 구간(현재→다음) 기준으로 상승/하락/보합 판정
+                                def _seg_dir(_r):
+                                    y1 = _r.get("변동 후")
+                                    y2 = _r.get("y2")
+                                    if pd.isna(y1) or pd.isna(y2):
+                                        return "same"
+                                    if float(y2) > float(y1):
+                                        return "up"
+                                    if float(y2) < float(y1):
+                                        return "down"
+                                    return "same"
+                                seg_df["direction_seg"] = seg_df.apply(_seg_dir, axis=1)
+
+
+    
+                                seg_chart = alt.Chart(seg_df).mark_rule(strokeWidth=3).encode(
+
+    
+                                    x=alt.X(
+
+    
+                                        "변동사유:N",
+
+    
+                                        sort=order,
+
+    
+                                        title=None,
+
+    
+                                        axis=alt.Axis(labelAngle=0),
+
+    
+                                    ),
+
+    
+                                    x2="x2:N",
+
+    
+                                    y=alt.Y(
+
+    
+                                        "변동 후:Q",
+
+    
+                                        title=None,
+
+    
+                                        scale=alt.Scale(domain=[50, 100]),
+
+    
+                                    ),
+
+    
+                                    y2="y2:Q",
+
+    
+                                    color=alt.Color(
+
+    
+                                        "direction_seg:N",
+
+    
+                                        scale=alt.Scale(domain=["up", "down", "same"], range=["red", "blue", "black"]),
+
+    
+                                        legend=None,
+
+    
+                                    ),
+
+    
+                                    tooltip=["변동사유", "변동 후"],
+
+    
+                                )
+
+
+    
+                                pt_chart = alt.Chart(chart_df).mark_point(size=55, color="gray").encode(
+
+    
+                                    x=alt.X(
+
+    
+                                        "변동사유:N",
+
+    
+                                        sort=order,
+
+    
+                                        title=None,
+
+    
+                                        axis=alt.Axis(labelAngle=0),
+
+    
+                                    ),
+
+    
+                                    y=alt.Y(
+
+    
+                                        "변동 후:Q",
+
+    
+                                        title=None,
+
+    
+                                        scale=alt.Scale(domain=[50, 100]),
+
+    
+                                    ),
+
+    
+                                    tooltip=["변동사유", "변동 후"],
+
+    
+                                )
+
+
+    
+                                chart = (seg_chart + pt_chart).properties(height=260)
+
+    
+                                st.altair_chart(chart, use_container_width=True)
+                            else:
+                                st.caption("그래프 데이터가 없습니다.")
+    
+                    else:
+                        st.caption("아직 주가 변동 기록이 없습니다.")
+    
             else:
-                prod_labels = [f"{p['name']} (현재 {p['current_price']:.1f})" for p in products]
-                by_label = {lab: p for lab, p in zip(prod_labels, products)}
-
-                sel_lab = st.selectbox("투자 종목 선택", prod_labels, key="inv_user_sel_prod")
-                sel_prod = by_label.get(sel_lab)
-
-                amt = st.number_input("투자 금액", min_value=0, step=10, value=0, key="inv_user_amt")
-                if st.button("투자", use_container_width=True, key="inv_user_btn"):
-                    if int(amt) <= 0:
-                        st.warning("투자 금액을 입력해 주세요.")
-                    else:
-                        st.session_state["inv_user_confirm"] = True
-
-                if st.session_state.get("inv_user_confirm", False):
-                    st.warning("정말로 투자할까요?")
-                    y, n = st.columns(2)
-                    with y:
-                        if st.button("예", use_container_width=True, key="inv_user_yes"):
-                            st.session_state["inv_user_confirm"] = False
-
-                            memo = f"투자 매입({sel_prod['name']})"
-                            res = api_add_tx(login_name, login_pin, memo=memo, deposit=0, withdraw=int(amt))
-                            if res.get("ok"):
+                with st.expander(f"{nm} 주가 변동 내역", expanded=False):
+                    # 변동 내역(표)
+                    hist = _get_history(p["product_id"], limit=120)
+                    if hist:
+                        rows = []
+                        for h in hist:
+                            dt = _ts_to_dt(h.get("created_at"))
+                            pb = float(h.get("price_before", 0.0) or 0.0)
+                            pa = float(h.get("price_after", 0.0) or 0.0)
+                            diff = round(pa - pb, 1)
+    
+                            # 변동일시: 0월 0일(요일) 오전/오후 00시 00분
+                            def _fmt_kor_datetime(dt_obj):
+                                if not dt_obj:
+                                    return "-"
                                 try:
-                                    sd = fs_auth_student(login_name, login_pin)
-                                    sdata = sd.to_dict() or {}
-                                    no = int(sdata.get("no", 0) or 0)
-
-                                    buy_dt = datetime.now(tz=KST)
-                                    buy_label = _fmt_kor_date_md(buy_dt)
-
-                                    db.collection(INV_LEDGER_COL).document().set(
-                                        {
-                                            "student_id": sd.id,
-                                            "no": no,
-                                            "name": str(sdata.get("name", "") or ""),
-                                            "product_id": sel_prod["product_id"],
-                                            "product_name": sel_prod["name"],
-                                            "buy_at": firestore.SERVER_TIMESTAMP,
-                                            "buy_date_label": buy_label,
-                                            "buy_price": _as_price1(sel_prod["current_price"]),
-                                            "invest_amount": int(amt),
-                                            "redeemed": False,
-                                        }
-                                    )
-                                    toast("투자 완료! (장부에 반영됨)", icon="✅")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"장부 저장 실패: {e}")
+                                    dt_kst = dt_obj.astimezone(KST)
+                                except Exception:
+                                    dt_kst = dt_obj
+    
+                                hour = dt_kst.hour
+                                ampm = "오전" if hour < 12 else "오후"
+                                hh = hour if 1 <= hour <= 12 else (hour - 12 if hour > 12 else 12)
+                                return f"{dt_kst.month}월 {dt_kst.day}일({days_ko[dt_kst.weekday()]}) {ampm} {hh:02d}시 {dt_kst.minute:02d}분"
+    
+                            # 주가 등락 표시 (요청: 하락은 파란 아이콘+파란 글씨)
+                            if diff > 0:
+                                diff_view = f"<span style='color:red'>▲ +{diff:.1f}</span>"
+                            elif diff < 0:
+                                diff_view = f"<span style='color:blue'>▼ {diff:.1f}</span>"
                             else:
-                                st.error(res.get("error", "투자 실패"))
-                    with n:
-                        if st.button("아니오", use_container_width=True, key="inv_user_no"):
-                            st.session_state["inv_user_confirm"] = False
-                            st.rerun()
+                                diff_view = "-"
+    
+                            rows.append(
+                                {
+                                    "변동일시": _fmt_kor_datetime(dt),
+                                    "변동사유": h.get("reason", "") or "",
+                                    "주가": f"{pa:.1f}",          # ✅ '변동 후' → '주가'
+                                    "주가 등락": diff_view,
+                                }
+                            )
+    
+                        df = pd.DataFrame(rows)
+    
+                        # ✅ 표(왼쪽) + 꺾은선 그래프(오른쪽)
+                        left, right = st.columns([1.7,2.2], gap="large")
+    
+                        with left:
+                            st.markdown(
+                                df.to_html(escape=False, index=False, classes="inv_hist_table"),
+                                unsafe_allow_html=True,
+                            )
+    
+                        with right:
+                            # 가로: 변동사유 / 세로: 변동 후(주가)
+                            chart_rows = []
+    
+                            # ✅ 초기주가 1점 추가
+                            # - 변동 기록이 있으면: 가장 오래된 기록의 price_before가 '초기주가'
+                            # - 변동 기록이 없으면: 현재주가를 초기로 표시
+                            init_price = None
+                            if hist:
+                                oldest = hist[-1]  # hist는 최신순이라 마지막이 가장 오래됨
+                                init_price = float(oldest.get("price_before", 0.0) or 0.0)
+                            if init_price is None:
+                                init_price = float(p.get("current_price", 0.0) or 0.0)
+    
+                            chart_rows.append({"변동사유": "시작주가", "변동 후": round(init_price, 1)})
+    
+                            # ✅ 이후 변동(오래된→최신)
+                            for h2 in reversed(hist):
+                                reason2 = str(h2.get("reason", "") or "").strip() or "-"
+                                pa2 = float(h2.get("price_after", 0.0) or 0.0)
+                                chart_rows.append({"변동사유": reason2, "변동 후": round(pa2, 1)})
+    
+                            cdf = pd.DataFrame(chart_rows)
+    
+                            if not cdf.empty:
+                                order = cdf["변동사유"].tolist()
+    
+                                chart_df = cdf.copy().reset_index(drop=True)
 
-        # -------------------------------------------------
-        # 4) (관리자) 투자 종목 추가/수정/삭제
-        # -------------------------------------------------
-        if is_admin:
-            st.divider()
-            st.markdown("### 🧰 투자 종목 추가/수정/삭제")
 
-            prod_all = _get_products(active_only=False)
+    
+                                # ✅ (PATCH) 구간별 상승/하락/보합 색상 + 점(회색) 표시
 
-            # ✅ 드롭다운에는 "활성 종목"만 보이게(삭제=비활성은 숨김)
-            prod_active = [p for p in prod_all if bool(p.get("is_active", True))]
+    
+                                chart_df["prev_price"] = chart_df["변동 후"].shift(1)
 
-            labels = ["(신규 추가)"] + [p["name"] for p in prod_active if p["name"]]
 
-            sel = st.selectbox("편집 대상", labels, key="inv_admin_edit_sel")
+    
+                                def _dir(_row):
 
-            cur_obj = None
-            if sel != "(신규 추가)":
-                for p in prod_active:
-                    if p["name"] == sel:
-                        cur_obj = p
+    
+                                    p = _row.get("prev_price")
+
+    
+                                    v = _row.get("변동 후")
+
+    
+                                    if pd.isna(p) or pd.isna(v):
+
+    
+                                        return "same"
+
+    
+                                    if v > p:
+
+    
+                                        return "up"
+
+    
+                                    if v < p:
+
+    
+                                        return "down"
+
+    
+                                    return "same"
+
+
+    
+                                chart_df["direction"] = chart_df.apply(_dir, axis=1)
+
+    
+                                chart_df["x2"] = chart_df["변동사유"].shift(-1)
+
+    
+                                chart_df["y2"] = chart_df["변동 후"].shift(-1)
+
+    
+                                seg_df = chart_df.dropna(subset=["x2"]).copy()
+
+                                # ✅ 구간(현재→다음) 기준으로 상승/하락/보합 판정
+                                def _seg_dir(_r):
+                                    y1 = _r.get("변동 후")
+                                    y2 = _r.get("y2")
+                                    if pd.isna(y1) or pd.isna(y2):
+                                        return "same"
+                                    if float(y2) > float(y1):
+                                        return "up"
+                                    if float(y2) < float(y1):
+                                        return "down"
+                                    return "same"
+                                seg_df["direction_seg"] = seg_df.apply(_seg_dir, axis=1)
+
+
+    
+                                seg_chart = alt.Chart(seg_df).mark_rule(strokeWidth=3).encode(
+
+    
+                                    x=alt.X(
+
+    
+                                        "변동사유:N",
+
+    
+                                        sort=order,
+
+    
+                                        title=None,
+
+    
+                                        axis=alt.Axis(labelAngle=0),
+
+    
+                                    ),
+
+    
+                                    x2="x2:N",
+
+    
+                                    y=alt.Y(
+
+    
+                                        "변동 후:Q",
+
+    
+                                        title=None,
+
+    
+                                        scale=alt.Scale(domain=[50, 100]),
+
+    
+                                    ),
+
+    
+                                    y2="y2:Q",
+
+    
+                                    color=alt.Color(
+
+    
+                                        "direction_seg:N",
+
+    
+                                        scale=alt.Scale(domain=["up", "down", "same"], range=["red", "blue", "black"]),
+
+    
+                                        legend=None,
+
+    
+                                    ),
+
+    
+                                    tooltip=["변동사유", "변동 후"],
+
+    
+                                )
+
+
+    
+                                pt_chart = alt.Chart(chart_df).mark_point(size=55, color="gray").encode(
+
+    
+                                    x=alt.X(
+
+    
+                                        "변동사유:N",
+
+    
+                                        sort=order,
+
+    
+                                        title=None,
+
+    
+                                        axis=alt.Axis(labelAngle=0),
+
+    
+                                    ),
+
+    
+                                    y=alt.Y(
+
+    
+                                        "변동 후:Q",
+
+    
+                                        title=None,
+
+    
+                                        scale=alt.Scale(domain=[50, 100]),
+
+    
+                                    ),
+
+    
+                                    tooltip=["변동사유", "변동 후"],
+
+    
+                                )
+
+
+    
+                                chart = (seg_chart + pt_chart).properties(height=260)
+
+    
+                                st.altair_chart(chart, use_container_width=True)
+                            else:
+                                st.caption("그래프 데이터가 없습니다.")
+    
+                    else:
+                        st.caption("아직 주가 변동 기록이 없습니다.")
+    
+    st.divider()
+    
+    # -------------------------------------------------
+    # 2) 투자 상품 관리 장부
+    # -------------------------------------------------
+    st.markdown("### 🧾 투자 상품 관리 장부")
+    
+    ledger_rows = _load_ledger(None if is_admin else my_student_id)
+    
+    view_rows = []
+    for x in ledger_rows:
+        redeemed = bool(x.get("redeemed", False))
+        view_rows.append(
+            {
+                "번호": int(x.get("no", 0) or 0),
+                "이름": str(x.get("name", "") or ""),
+                "종목": str(x.get("product_name", "") or ""),
+                "매입일자": str(x.get("buy_date_label", "") or ""),
+                "매입 주가": f"{_as_price1(x.get('buy_price', 0.0)):.1f}",
+                "투자 금액": int(x.get("invest_amount", 0) or 0),
+                "지급완료": "✅" if redeemed else "",
+                "매수일자": str(x.get("sell_date_label", "") or ""),
+                "매수 주가": f"{_as_price1(x.get('sell_price', 0.0)):.1f}" if redeemed else "",
+                "주가차이": f"{_as_price1(x.get('diff', 0.0)):.1f}" if redeemed else "",
+                "수익/손실금": int(round(float(x.get("profit", 0.0) or 0.0))) if redeemed else "",
+                "찾을 금액": int(x.get("redeem_amount", 0) or 0) if redeemed else "",
+                "_doc_id": x.get("_doc_id"),
+                "_student_id": x.get("student_id"),
+                "_product_id": x.get("product_id"),
+                "_buy_price": x.get("buy_price"),
+                "_invest_amount": x.get("invest_amount"),
+            }
+        )
+    
+    if view_rows:
+        st.dataframe(pd.DataFrame(view_rows).drop(columns=["_doc_id","_student_id","_product_id","_buy_price","_invest_amount"], errors="ignore"),
+                     use_container_width=True, hide_index=True)
+    else:
+        st.caption("투자 내역이 없습니다.")
+    
+    # -------------------------------------------------
+    # 2-1) 지급(회수) 처리
+    # -------------------------------------------------
+    pending = [x for x in view_rows if not any([x.get("지급완료") == "✅"])]
+    if pending:
+        st.markdown("#### 💸 투자 회수(지급)")
+        can_redeem_now = _can_redeem(my_student_id)
+        if (not is_admin) and (not can_redeem_now):
+            st.info("투자 회수는 관리자 또는 '투자증권' 직업 학생만 할 수 있어요.")
+        else:
+            for x in pending[:100]:
+                doc_id = str(x.get("_doc_id", "") or "")
+                sid = str(x.get("_student_id", "") or "")
+                pid = str(x.get("_product_id", "") or "")
+                buy_price = _as_price1(x.get("_buy_price", 0.0))
+                invest_amt = int(x.get("_invest_amount", 0) or 0)
+                prod_name = str(x.get("종목", "") or "")
+    
+                # 현재 주가 찾기
+                cur_price = buy_price
+                for p in products:
+                    if str(p["product_id"]) == pid:
+                        cur_price = _as_price1(p["current_price"])
                         break
-
-            name_default = "" if cur_obj is None else cur_obj["name"]
-            price_default = 0.0 if cur_obj is None else float(cur_obj["current_price"])
-
-            c1, c2 = st.columns([2.2, 1.2], gap="small")
-            with c1:
-                new_name = st.text_input("투자 종목명", value=name_default, key="inv_admin_name")
-            with c2:
-                new_price = st.number_input(
-                    "초기/현재 주가",
-                    min_value=0.0,
-                    max_value=999.9,
-                    step=0.1,
-                    format="%.1f",
-                    value=float(price_default),
-                    key="inv_admin_price",
-                )
-
-            b1, b2 = st.columns(2)
-            with b1:
-                if st.button("저장", use_container_width=True, key="inv_admin_save"):
-                    nm = str(new_name or "").strip()
-                    if not nm:
-                        st.warning("종목명을 입력해 주세요.")
-                    else:
-                        # ✅ 중복 종목명 방지(공백/대소문자 무시)
-                        nm_key = nm.replace(" ", "").lower()
-                        dup = None
-                        for p in prod_all:
-                            pnm = str(p.get("name", "") or "").strip()
-                            if pnm and pnm.replace(" ", "").lower() == nm_key:
-                                dup = p
-                                break
-
-                        # (신규 추가)인데 이미 존재하면:
-                        # - 활성 종목이면: 중복 추가 막기
-                        # - 비활성(삭제된) 종목이면: 새로 만들지 말고 "복구(재활성화)" 처리
-                        if cur_obj is None and dup is not None:
-                            if bool(dup.get("is_active", True)):
-                                st.error("이미 같은 종목명이 있어요. (중복 추가 불가)")
-                                st.stop()
-                            else:
-                                # ✅ 비활성 종목 복구
-                                try:
-                                    db.collection(INV_PROD_COL).document(dup["product_id"]).set(
-                                        {
-                                            "name": nm,
-                                            "current_price": _as_price1(new_price),
-                                            "is_active": True,
-                                            "updated_at": firestore.SERVER_TIMESTAMP,
-                                        },
-                                        merge=True,
-                                    )
-                                    toast("삭제된 종목을 복구했습니다.", icon="♻️")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"복구 실패: {e}")
-                                    st.stop()
-
-                        # (수정)인데 다른 문서와 이름이 겹치면 막기
-                        if cur_obj is not None and dup is not None and str(dup.get("product_id")) != str(cur_obj.get("product_id")):
-                            st.error("이미 같은 종목명이 있어요. (중복 이름 불가)")
-                            st.stop()
-
-                        try:
-                            if cur_obj is None:
-                                db.collection(INV_PROD_COL).document().set(
+    
+                diff, profit, redeem_amt = _calc_redeem_amount(invest_amt, buy_price, cur_price)
+    
+                c1, c2, c3, c4 = st.columns([1.2, 2.2, 2.8, 1.2], gap="small")
+                with c1:
+                    st.markdown(f"**{x.get('번호','')}**")
+                with c2:
+                    st.markdown(f"{x.get('이름','')}")
+                    st.caption(prod_name)
+                with c3:
+                    st.caption(f"매입 {buy_price:.1f} → 현재 {cur_price:.1f} (차이 {diff:.1f})")
+                    st.caption(f"수익/손실 {profit:.1f} | 찾을 금액 {redeem_amt}")
+                with c4:
+                    if st.button("지급", use_container_width=True, key=f"inv_pay_{doc_id}"):
+    
+                        sell_dt = datetime.now(tz=KST)
+                        sell_label = _fmt_kor_date_md(sell_dt)
+                        memo = f"투자 회수({prod_name})"
+    
+                        if inv_admin_ok:
+                            res = api_admin_add_tx_by_student_id(
+                                admin_pin=ADMIN_PIN,
+                                student_id=sid,
+                                memo=memo,
+                                deposit=int(redeem_amt),
+                                withdraw=0,
+                            )
+                        else:
+                            res = api_broker_deposit_by_student_id(
+                                actor_student_id=my_student_id,
+                                student_id=sid,
+                                memo=memo,
+                                deposit=int(redeem_amt),
+                            )
+    
+                        if res.get("ok"):
+                            try:
+                                db.collection(INV_LEDGER_COL).document(doc_id).set(
                                     {
-                                        "name": nm,
-                                        "current_price": _as_price1(new_price),
-                                        "is_active": True,
-                                        "created_at": firestore.SERVER_TIMESTAMP,
-                                        "updated_at": firestore.SERVER_TIMESTAMP,
+                                        "redeemed": True,
+                                        "sell_at": firestore.SERVER_TIMESTAMP,
+                                        "sell_date_label": sell_label,
+                                        "sell_price": _as_price1(cur_price),
+                                        "diff": _as_price1(diff),
+                                        "profit": float(profit),
+                                        "redeem_amount": int(redeem_amt),
+                                    },
+                                    merge=True,
+                                )
+                                toast("지급 완료!", icon="✅")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"장부 업데이트 실패: {e}")
+                        else:
+                            st.error(res.get("error", "지급 실패"))
+    
+    st.divider()
+    
+    # -------------------------------------------------
+    # 3) (사용자) 투자 실행
+    # -------------------------------------------------
+    if not is_admin:
+        st.markdown("### 💳 투자하기")
+    
+        inv_ok2 = True
+        try:
+            snap = db.collection("students").document(str(my_student_id)).get()
+            if snap.exists:
+                inv_ok2 = bool((snap.to_dict() or {}).get("invest_enabled", True))
+        except Exception:
+            inv_ok2 = True
+    
+        if not inv_ok2:
+            st.warning("이 계정은 현재 투자 기능이 비활성화되어 있어요.")
+        elif not products:
+            st.info("투자 종목이 아직 없어요. 관리자에게 종목 추가를 요청해 주세요.")
+        else:
+            prod_labels = [f"{p['name']} (현재 {p['current_price']:.1f})" for p in products]
+            by_label = {lab: p for lab, p in zip(prod_labels, products)}
+    
+            sel_lab = st.selectbox("투자 종목 선택", prod_labels, key="inv_user_sel_prod")
+            sel_prod = by_label.get(sel_lab)
+    
+            amt = st.number_input("투자 금액", min_value=0, step=10, value=0, key="inv_user_amt")
+            if st.button("투자(다음 확인창에서 ‘예’를 눌러야 완료, 신중하게 결정하기)", use_container_width=True, key="inv_user_btn"):
+                if int(amt) <= 0:
+                    st.warning("투자 금액을 입력해 주세요.")
+                else:
+                    st.session_state["inv_user_confirm"] = True
+    
+            if st.session_state.get("inv_user_confirm", False):
+                st.warning("정말로 투자할까요?")
+                y, n = st.columns(2)
+                with y:
+                    if st.button("예", use_container_width=True, key="inv_user_yes"):
+                        st.session_state["inv_user_confirm"] = False
+    
+                        memo = f"투자 매입({sel_prod['name']})"
+                        res = api_add_tx(login_name, login_pin, memo=memo, deposit=0, withdraw=int(amt))
+                        if res.get("ok"):
+                            try:
+                                sd = fs_auth_student(login_name, login_pin)
+                                sdata = sd.to_dict() or {}
+                                no = int(sdata.get("no", 0) or 0)
+    
+                                buy_dt = datetime.now(tz=KST)
+                                buy_label = _fmt_kor_date_md(buy_dt)
+    
+                                db.collection(INV_LEDGER_COL).document().set(
+                                    {
+                                        "student_id": sd.id,
+                                        "no": no,
+                                        "name": str(sdata.get("name", "") or ""),
+                                        "product_id": sel_prod["product_id"],
+                                        "product_name": sel_prod["name"],
+                                        "buy_at": firestore.SERVER_TIMESTAMP,
+                                        "buy_date_label": buy_label,
+                                        "buy_price": _as_price1(sel_prod["current_price"]),
+                                        "invest_amount": int(amt),
+                                        "redeemed": False,
                                     }
                                 )
-                                toast("종목이 추가되었습니다.", icon="✅")
-                            else:
-                                db.collection(INV_PROD_COL).document(cur_obj["product_id"]).set(
+                                toast("투자 완료! (장부에 반영됨)", icon="✅")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"장부 저장 실패: {e}")
+                        else:
+                            st.error(res.get("error", "투자 실패"))
+                with n:
+                    if st.button("아니오", use_container_width=True, key="inv_user_no"):
+                        st.session_state["inv_user_confirm"] = False
+                        st.rerun()
+    
+    # -------------------------------------------------
+    # 4) (관리자) 투자 종목 추가/수정/삭제
+    # -------------------------------------------------
+    if inv_admin_ok:
+        st.divider()
+        st.markdown("### 🧰 투자 종목 추가/수정/삭제")
+    
+        prod_all = _get_products(active_only=False)
+    
+        # ✅ 드롭다운에는 "활성 종목"만 보이게(삭제=비활성은 숨김)
+        prod_active = [p for p in prod_all if bool(p.get("is_active", True))]
+    
+        labels = ["(신규 추가)"] + [p["name"] for p in prod_active if p["name"]]
+    
+        sel = st.selectbox("편집 대상", labels, key="inv_admin_edit_sel")
+    
+        cur_obj = None
+        if sel != "(신규 추가)":
+            for p in prod_active:
+                if p["name"] == sel:
+                    cur_obj = p
+                    break
+    
+        name_default = "" if cur_obj is None else cur_obj["name"]
+        price_default = 0.0 if cur_obj is None else float(cur_obj["current_price"])
+    
+        c1, c2 = st.columns([2.2, 1.2], gap="small")
+        with c1:
+            new_name = st.text_input("투자 종목명", value=name_default, key="inv_admin_name")
+        with c2:
+            new_price = st.number_input(
+                "초기/현재 주가",
+                min_value=0.0,
+                max_value=999.9,
+                step=0.1,
+                format="%.1f",
+                value=float(price_default),
+                key="inv_admin_price",
+            )
+    
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("저장", use_container_width=True, key="inv_admin_save"):
+                nm = str(new_name or "").strip()
+                if not nm:
+                    st.warning("종목명을 입력해 주세요.")
+                else:
+                    # ✅ 중복 종목명 방지(공백/대소문자 무시)
+                    nm_key = nm.replace(" ", "").lower()
+                    dup = None
+                    for p in prod_all:
+                        pnm = str(p.get("name", "") or "").strip()
+                        if pnm and pnm.replace(" ", "").lower() == nm_key:
+                            dup = p
+                            break
+    
+                    # (신규 추가)인데 이미 존재하면:
+                    # - 활성 종목이면: 중복 추가 막기
+                    # - 비활성(삭제된) 종목이면: 새로 만들지 말고 "복구(재활성화)" 처리
+                    if cur_obj is None and dup is not None:
+                        if bool(dup.get("is_active", True)):
+                            st.error("이미 같은 종목명이 있어요. (중복 추가 불가)")
+                            st.stop()
+                        else:
+                            # ✅ 비활성 종목 복구
+                            try:
+                                db.collection(INV_PROD_COL).document(dup["product_id"]).set(
                                     {
                                         "name": nm,
                                         "current_price": _as_price1(new_price),
@@ -4925,27 +6705,698 @@ if "📈 투자" in tabs:
                                     },
                                     merge=True,
                                 )
-                                toast("종목이 수정되었습니다.", icon="✅")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"저장 실패: {e}")
-            with b2:
-                if st.button("삭제", use_container_width=True, key="inv_admin_del", disabled=(cur_obj is None)):
-                    if cur_obj is None:
+                                toast("삭제된 종목을 복구했습니다.", icon="♻️")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"복구 실패: {e}")
+                                st.stop()
+    
+                    # (수정)인데 다른 문서와 이름이 겹치면 막기
+                    if cur_obj is not None and dup is not None and str(dup.get("product_id")) != str(cur_obj.get("product_id")):
+                        st.error("이미 같은 종목명이 있어요. (중복 이름 불가)")
                         st.stop()
+    
                     try:
-                        db.collection(INV_PROD_COL).document(cur_obj["product_id"]).set(
-                            {"is_active": False, "updated_at": firestore.SERVER_TIMESTAMP},
-                            merge=True,
-                        )
-                        toast("삭제(비활성화) 완료", icon="🗑️")
+                        if cur_obj is None:
+                            db.collection(INV_PROD_COL).document().set(
+                                {
+                                    "name": nm,
+                                    "current_price": _as_price1(new_price),
+                                    "is_active": True,
+                                    "created_at": firestore.SERVER_TIMESTAMP,
+                                    "updated_at": firestore.SERVER_TIMESTAMP,
+                                }
+                            )
+                            toast("종목이 추가되었습니다.", icon="✅")
+                        else:
+                            db.collection(INV_PROD_COL).document(cur_obj["product_id"]).set(
+                                {
+                                    "name": nm,
+                                    "current_price": _as_price1(new_price),
+                                    "is_active": True,
+                                    "updated_at": firestore.SERVER_TIMESTAMP,
+                                },
+                                merge=True,
+                            )
+                            toast("종목이 수정되었습니다.", icon="✅")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"삭제 실패: {e}")
+                        st.error(f"저장 실패: {e}")
+        with b2:
+            if st.button("삭제", use_container_width=True, key="inv_admin_del", disabled=(cur_obj is None)):
+                if cur_obj is None:
+                    st.stop()
+                try:
+                    db.collection(INV_PROD_COL).document(cur_obj["product_id"]).set(
+                        {"is_active": False, "updated_at": firestore.SERVER_TIMESTAMP},
+                        merge=True,
+                    )
+                    toast("삭제(비활성화) 완료", icon="🗑️")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"삭제 실패: {e}")
+    
+    # =========================
+    # 👥 계정 정보/활성화 (관리자 전용)
+    # =========================
 
 # =========================
-# 👥 계정 정보/활성화 (관리자 전용)
+# (학생) 📈 투자(관리자) — 별도 탭 (admin::📈 투자)
 # =========================
+if "admin::📈 투자" in tabs:
+    with tab_map["admin::📈 투자"]:
+        st.subheader("📈 투자(관리자)")
+        # ✅ 이 탭은 "관리자 기능 접근 권한"을 받은 학생에게만 노출됩니다.
+        #    따라서 화면/기능을 관리자 탭과 완전히 동일하게 렌더링합니다.
+        _render_invest_admin_like(
+            inv_admin_ok_flag=True,
+            force_is_admin=True,
+            my_student_id=my_student_id,
+            login_name=login_name,
+            login_pin=login_pin,
+        )
+if "admin::🏦 은행(적금)" in tabs:
+    with tab_map["admin::🏦 은행(적금)"]:
+        st.subheader("🏦 은행(적금)(관리자)")
+        if is_admin:
+            st.info("관리자 모드에서는 상단 '🏦 은행(적금)' 탭에서 사용합니다.")
+        else:
+            bank_admin_ok = True
+
+        # -------------------------------------------------
+        # 공통 유틸
+        # -------------------------------------------------
+        def _fmt_kor_date_short_from_dt(dt: datetime) -> str:
+            try:
+                dt2 = dt.astimezone(KST)
+                wd = ["월", "화", "수", "목", "금", "토", "일"][dt2.weekday()]
+                return f"{dt2.month}월 {dt2.day}일({wd})"
+            except Exception:
+                return ""
+
+        def _parse_iso_to_dt(iso_utc: str):
+            try:
+                return datetime.fromisoformat(str(iso_utc).replace("Z", "+00:00"))
+            except Exception:
+                return None
+
+        def _dt_to_iso_z(dt: datetime) -> str:
+            try:
+                return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            except Exception:
+                return ""
+
+        def _score_to_grade(score: int) -> int:
+            s = int(score)
+            if s >= 90:
+                return 1
+            if s >= 80:
+                return 2
+            if s >= 70:
+                return 3
+            if s >= 60:
+                return 4
+            if s >= 50:
+                return 5
+            if s >= 40:
+                return 6
+            if s >= 30:
+                return 7
+            if s >= 20:
+                return 8
+            if s >= 10:
+                return 9
+            return 10
+
+        def _norm_status(v) -> str:
+            v = str(v or "").strip().upper()
+            if v in ("O", "○"):
+                return "O"
+            if v in ("△", "▲", "Δ"):
+                return "△"
+            return "X"
+
+        # -------------------------------------------------
+        # (1) 이자율 표(설정값 Firestore에서 로드)
+        #  - config/bank_rates : {"weeks":[1..10], "rates": {"1":{"1":10, ...}, ...}}
+        #  - ✅ 엑셀 표(1~10주) 기준. DB값이 다르면 자동으로 덮어씀.
+        # -------------------------------------------------
+        def _build_excel_bank_rates():
+            weeks = [1,2,3,4,5,6,7,8,9,10]
+            rates = {}
+            for g in range(1, 11):
+                rates[str(g)] = {}
+                for w in weeks:
+                    rates[str(g)][str(w)] = int((11 - g) * w)  # ✅ 너 엑셀 표 그대로
+            return weeks, rates
+
+        def _is_same_excel_table(d: dict) -> bool:
+            try:
+                weeks_db = [int(x) for x in (d.get("weeks", []) or [])]
+                rates_db = d.get("rates", {}) or {}
+                weeks_x, rates_x = _build_excel_bank_rates()
+
+                if weeks_db != weeks_x:
+                    return False
+
+                for g in range(1, 11):
+                    gk = str(g)
+                    if gk not in rates_db:
+                        return False
+                    for w in weeks_x:
+                        wk = str(w)
+                        if str(int(rates_db[gk].get(wk, -999))) != str(int(rates_x[gk][wk])):
+                            return False
+                return True
+            except Exception:
+                return False
+
+        def _get_bank_rate_cfg(force_excel: bool = True):
+            ref = db.collection("config").document("bank_rates")
+            snap = ref.get()
+
+            # ✅ 엑셀 표 만들기
+            weeks_x, rates_x = _build_excel_bank_rates()
+
+            # 1) DB에 있고, 엑셀 표와 동일하면 그대로 사용
+            if snap.exists:
+                d = snap.to_dict() or {}
+                if (not force_excel) or _is_same_excel_table(d):
+                    return {
+                        "weeks": list(d.get("weeks", []) or []),
+                        "rates": dict(d.get("rates", {}) or {})
+                    }
+
+            # 2) DB가 없거나 / 내용이 다르면 → 엑셀 표로 덮어쓰기
+            ref.set(
+                {"weeks": weeks_x, "rates": rates_x, "updated_at": firestore.SERVER_TIMESTAMP},
+                merge=False
+            )
+            return {"weeks": weeks_x, "rates": rates_x}
+
+        # ✅ 여기서 엑셀표 강제 적용
+        bank_rate_cfg = _get_bank_rate_cfg(force_excel=True)
+
+        def _get_interest_rate_percent(credit_grade: int, weeks: int) -> float:
+            try:
+                g = int(credit_grade)
+                w = int(weeks)
+            except Exception:
+                return 0.0
+
+            # 등급 1~10, 주 1~10으로 제한
+            g = 1 if g < 1 else 10 if g > 10 else g
+            w = 1 if w < 1 else 10 if w > 10 else w
+
+            rates = bank_rate_cfg.get("rates", {}) or {}
+            gmap = rates.get(str(g), {}) or {}
+            try:
+                return float(gmap.get(str(w), 0) or 0)
+            except Exception:
+                return 0.0
+
+        # -------------------------------------------------
+        # (2) 신용점수/등급(현재 시점) 계산 (학생 1명용)
+        #  - credit_scoring 설정 + 통계청 제출물(statuses) 누적
+        # -------------------------------------------------
+        def _get_credit_cfg():
+            ref = db.collection("config").document("credit_scoring")
+            snap = ref.get()
+            if not snap.exists:
+                return {"base": 50, "o": 1, "x": -3, "tri": 0}
+            d = snap.to_dict() or {}
+            return {
+                "base": int(d.get("base", 50) if d.get("base", None) is not None else 50),
+                "o": int(d.get("o", 1) if d.get("o", None) is not None else 1),
+                "x": int(d.get("x", -3) if d.get("x", None) is not None else -3),
+                "tri": int(d.get("tri", 0) if d.get("tri", None) is not None else 0),
+            }
+
+        def _calc_credit_score_for_student(student_id: str) -> tuple[int, int]:
+            cfg = _get_credit_cfg()
+            base = int(cfg.get("base", 50) if cfg.get("base", None) is not None else 50)
+            o_pt = int(cfg.get("o", 1) if cfg.get("o", None) is not None else 1)
+            x_pt = int(cfg.get("x", -3) if cfg.get("x", None) is not None else -3)
+            tri_pt = int(cfg.get("tri", 0) if cfg.get("tri", None) is not None else 0)
+
+            def _delta(v):
+                vv = _norm_status(v)
+                if vv == "O":
+                    return o_pt
+                if vv == "△":
+                    return tri_pt
+                return x_pt
+
+            sub_res = api_list_stat_submissions_cached(limit_cols=200)
+            sub_rows_all = sub_res.get("rows", []) if sub_res.get("ok") else []
+
+            # ✅ 오래된→최신 누적 (api_list_stat_submissions_cached는 최신→과거로 오므로 reversed)
+            sub_rows_all = list(sub_rows_all or [])
+
+            score = int(base)
+            sid = str(student_id)
+
+            for sub in reversed(sub_rows_all):
+                statuses = dict(sub.get("statuses", {}) or {})
+                v = statuses.get(sid, "X")
+                score = int(score + _delta(v))
+                if score > 100:
+                    score = 100
+                if score < 0:
+                    score = 0
+
+            grade = _score_to_grade(score)
+            return score, grade
+
+        # -------------------------------------------------
+        # (3) 적금 저장/조회/처리 (Firestore: savings)
+        # -------------------------------------------------
+        SAV_COL = "savings"
+        GOAL_COL = "goals"
+
+        def _compute_interest(principal: int, rate_percent: float) -> int:
+            # 소수 첫째자리에서 반올림 → 정수
+            try:
+                v = float(principal) * (float(rate_percent) / 100.0)
+                return int(round(v, 0))
+            except Exception:
+                return 0
+
+        def _ensure_maturity_processing_once():
+            """
+            관리자 화면에서 열 때:
+            - status=running 이고 maturity_utc <= now 인 것들을 자동 만기 처리
+            - 원금+이자를 학생 통장에 입금(+)
+            """
+            now = datetime.now(timezone.utc)
+            q = db.collection(SAV_COL).where(filter=FieldFilter("status", "==", "running")).stream()
+
+            proc_cnt = 0
+            for d in q:
+                x = d.to_dict() or {}
+                mdt = _parse_iso_to_dt(x.get("maturity_utc", "") or "")
+                if not mdt:
+                    continue
+                if mdt <= now:
+                    student_id = str(x.get("student_id") or "")
+                    if not student_id:
+                        continue
+
+                    payout = int(x.get("maturity_amount", 0) or 0)
+                    memo = f"적금 만기 지급 ({x.get('weeks')}주)"
+                    res = api_admin_add_tx_by_student_id(
+                        admin_pin=ADMIN_PIN,
+                        student_id=student_id,
+                        memo=memo,
+                        deposit=payout,
+                        withdraw=0,
+                    )
+                    if res.get("ok"):
+                        db.collection(SAV_COL).document(d.id).update(
+                            {
+                                "status": "matured",
+                                "payout_amount": payout,
+                                "processed_at": firestore.SERVER_TIMESTAMP,
+                            }
+                        )
+                        proc_cnt += 1
+
+            if proc_cnt > 0:
+                toast(f"만기 자동 처리: {proc_cnt}건", icon="🏦")
+
+        def _cancel_savings(doc_id: str):
+            """
+            중도해지:
+            - 원금만 학생 통장에 입금(+)
+            - status=canceled
+            """
+            snap = db.collection(SAV_COL).document(doc_id).get()
+            if not snap.exists:
+                return {"ok": False, "error": "해당 적금을 찾지 못했어요."}
+            x = snap.to_dict() or {}
+            if str(x.get("status")) != "running":
+                return {"ok": False, "error": "진행중인 적금만 중도해지할 수 있어요."}
+
+            student_id = str(x.get("student_id") or "")
+            principal = int(x.get("principal", 0) or 0)
+
+            res = api_admin_add_tx_by_student_id(
+                admin_pin=ADMIN_PIN,
+                student_id=student_id,
+                memo=f"적금 중도해지 지급 ({x.get('weeks')}주)",
+                deposit=principal,
+                withdraw=0,
+            )
+            if res.get("ok"):
+                db.collection(SAV_COL).document(doc_id).update(
+                    {
+                        "status": "canceled",
+                        "payout_amount": principal,
+                        "processed_at": firestore.SERVER_TIMESTAMP,
+                    }
+                )
+                return {"ok": True}
+            return {"ok": False, "error": res.get("error", "중도해지 실패")}
+
+        def _make_savings(student_id: str, no: int, name: str, weeks: int, principal: int):
+            """
+            적금 가입:
+            - 학생 통장에서 principal 출금(-) 처리
+            - savings 문서 생성 (신용등급/이자율/만기금액 자동)
+            """
+            principal = int(principal or 0)
+            weeks = int(weeks or 0)
+            if principal <= 0:
+                return {"ok": False, "error": "적금 금액이 0보다 커야 해요."}
+            if weeks <= 0:
+                return {"ok": False, "error": "적금 기간(주)을 선택해 주세요."}
+
+            # ✅ 현재 신용등급(적금 당시 등급 저장)
+            score, grade = _calc_credit_score_for_student(student_id)
+            rate = _get_interest_rate_percent(grade, weeks)
+
+            interest = _compute_interest(principal, rate)
+            maturity_amt = int(principal + interest)
+
+            now_kr = datetime.now(KST)
+            now_utc = now_kr.astimezone(timezone.utc)
+            maturity_utc = now_utc + timedelta(days=int(weeks) * 7)
+
+            # 1) 통장에서 출금(적금 넣기)
+            res_wd = api_admin_add_tx_by_student_id(
+                admin_pin=ADMIN_PIN,
+                student_id=student_id,
+                memo=f"적금 가입 ({weeks}주)",
+                deposit=0,
+                withdraw=principal,
+            )
+            if not res_wd.get("ok"):
+                return {"ok": False, "error": res_wd.get("error", "통장 출금 실패")}
+
+            # 2) savings 문서 생성
+            payload = {
+                "student_id": str(student_id),
+                "no": int(no),
+                "name": str(name),
+                "weeks": int(weeks),
+                "credit_score": int(score),
+                "credit_grade": int(grade),
+                "rate_percent": float(rate),
+                "principal": int(principal),
+                "interest": int(interest),
+                "maturity_amount": int(maturity_amt),
+                "start_utc": _dt_to_iso_z(now_utc),
+                "maturity_utc": _dt_to_iso_z(maturity_utc),
+                "status": "running",          # running / matured / canceled
+                "payout_amount": None,
+                "created_at": firestore.SERVER_TIMESTAMP,
+            }
+            db.collection(SAV_COL).document().set(payload)
+            return {"ok": True}
+
+        def _load_savings_rows(limit=500):
+            q = db.collection(SAV_COL).order_by("start_utc", direction=firestore.Query.DESCENDING).limit(int(limit)).stream()
+            rows = []
+            for d in q:
+                x = d.to_dict() or {}
+                x["_id"] = d.id
+                rows.append(x)
+            return rows
+
+        # -------------------------------------------------
+        # (관리자) 자동 만기 처리(열 때마다 한 번)
+        # -------------------------------------------------
+        if bank_admin_ok:
+            _ensure_maturity_processing_once()
+
+        # -------------------------------------------------
+        # (A) 관리자: 적금 관리 장부 (엑셀형 표 느낌) + 최신순
+        # -------------------------------------------------
+        if bank_admin_ok:
+            st.markdown("### 📒 적금 관리 장부")
+
+            st.markdown(
+                """
+<style>
+/* 은행(적금) 탭의 표 글씨를 조금 작게 */
+div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
+</style>
+""",
+                unsafe_allow_html=True,
+            )
+
+            sav_rows = _load_savings_rows(limit=800)
+            if not sav_rows:
+                st.info("적금 내역이 아직 없어요.")
+            else:
+                now_utc = datetime.now(timezone.utc)
+
+                out = []
+                for r in sav_rows:
+                    start_dt = _parse_iso_to_dt(r.get("start_utc", "") or "")
+                    mat_dt = _parse_iso_to_dt(r.get("maturity_utc", "") or "")
+
+                    status = str(r.get("status", "running") or "running")
+                    if status == "canceled":
+                        result = "중도해지"
+                    else:
+                        if mat_dt and mat_dt <= now_utc:
+                            result = "만기"
+                        else:
+                            result = "진행중"
+
+                    if result == "진행중":
+                        payout_disp = "-"
+                    elif result == "중도해지":
+                        payout_disp = int(r.get("payout_amount") or r.get("principal", 0) or 0)
+                    else:
+                        payout_disp = int(r.get("payout_amount") or r.get("maturity_amount", 0) or 0)
+
+                    start_disp = _fmt_kor_date_short_from_dt(start_dt.astimezone(KST)) if start_dt else ""
+                    mat_disp = _fmt_kor_date_short_from_dt(mat_dt.astimezone(KST)) if mat_dt else ""
+
+                    out.append(
+                        {
+                            "번호": int(r.get("no", 0) or 0),
+                            "이름": str(r.get("name", "") or ""),
+                            "적금기간": f"{int(r.get('weeks', 0) or 0)}주",
+                            "신용등급": f"{int(r.get('credit_grade', 10) or 10)}등급",
+                            "이자율": f"{float(r.get('rate_percent', 0.0) or 0.0)}%",
+                            "적금 금액": int(r.get("principal", 0) or 0),
+                            "이자": int(r.get("interest", 0) or 0),
+                            "만기 금액": int(r.get("maturity_amount", 0) or 0),
+                            "적금 날짜": start_disp,
+                            "만기 날짜": mat_disp,
+                            "처리 결과": result,
+                            "지급 금액": payout_disp,
+                            "_id": r.get("_id"),
+                        }
+                    )
+
+                df = pd.DataFrame(out)
+                show_cols = [
+                    "번호","이름","적금기간","신용등급","이자율","적금 금액","이자","만기 금액",
+                    "적금 날짜","만기 날짜","처리 결과","지급 금액"
+                ]
+                st.dataframe(df[show_cols], use_container_width=True, hide_index=True)
+
+                st.markdown("#### 🧯 중도해지 처리(관리자)")
+                st.caption("• 진행중인 적금만 중도해지 가능(원금만 지급)")
+
+                running = df[df["처리 결과"] == "진행중"].copy()
+                if running.empty:
+                    st.info("진행중인 적금이 없습니다.")
+                else:
+                    running = running.head(50)
+                    options = ["(선택 없음)"] + [
+                        f"{r['번호']} {r['이름']} | {r['적금기간']} | {r['적금 날짜']} | {r['적금 금액']}P"
+                        for _, r in running.iterrows()
+                    ]
+                    label_to_id = {options[i+1]: running.iloc[i]["_id"] for i in range(len(running))}
+
+                    pick = st.selectbox("중도해지할 적금 선택", options, key="bank_cancel_pick")
+                    if pick != "(선택 없음)":
+                        if st.button("중도해지 처리(원금 지급)", use_container_width=True, key="bank_cancel_do"):
+                            doc_id = str(label_to_id.get(pick))
+                            res = _cancel_savings(doc_id)
+                            if res.get("ok"):
+                                toast("중도해지 처리 완료", icon="✅")
+                                st.rerun()
+                            else:
+                                st.error(res.get("error", "중도해지 실패"))
+
+            st.divider()
+
+
+        
+        # -------------------------------------------------
+
+
+
+if "🔎 개별조회" in tabs:
+    with tab_map["🔎 개별조회"]:
+        st.subheader("🔎 개별조회(번호순)")
+
+        if not (is_admin or has_tab_access(my_perms, "🔎 개별조회", is_admin)):
+            st.error("접근 권한이 없습니다.")
+            st.stop()
+
+        name_search2 = st.text_input(
+            "🔎 계정검색(이름 일부)",
+            key="admin_ind_view_search"
+        ).strip()
+
+        # =================================================
+        # (PATCH) 🔎 개별조회 지연 로딩 게이트
+        #  - 로그인 시 자동 로딩 ❌
+        #  - 버튼 클릭 시에만 무거운 데이터 로드 ⭕
+        # =================================================
+        if "admin_ind_view_loaded" not in st.session_state:
+            st.session_state["admin_ind_view_loaded"] = False
+
+        # ✅ (PATCH) 로그아웃 상태면 이전에 눌렀던 "불러오기" 상태를 무조건 초기화
+        if not st.session_state.get("logged_in", False):
+            st.session_state.pop("admin_ind_view_loaded", None)
+
+        if not st.session_state["admin_ind_view_loaded"]:
+            st.info("개별조회 데이터는 필요할 때만 불러옵니다.")
+            if st.button(
+                "🔄 개별조회 데이터 불러오기",
+                key="admin_ind_view_load",
+                use_container_width=True
+            ):
+                st.session_state["admin_ind_view_loaded"] = True
+                st.rerun()
+        else:
+            # =========================
+            # 🔽 개별조회 접기 버튼
+            # =========================
+            if st.button(
+                "🔽 개별조회 접기",
+                key="admin_ind_view_close",
+                use_container_width=True
+            ):
+                st.session_state["admin_ind_view_loaded"] = False
+                st.rerun()
+
+            # =========================
+            # ✅ students에서 번호(no) 포함해서 다시 로드(번호순 정렬)
+            # =========================
+            docs = (
+                db.collection("students")
+                .where(filter=FieldFilter("is_active", "==", True))
+                .stream()
+            )
+
+            acc_rows = []
+            for d in docs:
+                x = d.to_dict() or {}
+                nm = str(x.get("name", "") or "").strip()
+                if not nm:
+                    continue
+                if name_search2 and (name_search2 not in nm):
+                    continue
+                try:
+                    no = int(x.get("no", 999999) or 999999)
+                except Exception:
+                    no = 999999
+
+                acc_rows.append(
+                    {
+                        "student_id": d.id,
+                        "no": no,
+                        "name": nm,
+                        "balance": int(x.get("balance", 0) or 0),
+                    }
+                )
+
+            acc_rows.sort(
+                key=lambda r: (
+                    int(r.get("no", 999999) or 999999),
+                    str(r.get("name", "")),
+                )
+            )
+
+            if not acc_rows:
+                st.info("표시할 계정이 없습니다.")
+            else:
+                for r in acc_rows:
+                    sid = str(r["student_id"])
+                    nm = str(r["name"])
+                    no = int(r.get("no", 0) or 0)
+                    bal_now = int(r.get("balance", 0) or 0)
+
+                    # -------------------------
+                    # 적금
+                    # -------------------------
+                    sres = api_savings_list_by_student_id(sid)
+                    savings = sres.get("savings", []) if sres.get("ok") else []
+
+                    # ✅ 적금 탭과 동일한 기준: 만기/해지 제외 원금 합계
+                    sv_total = sum(
+                        int(s.get("principal", 0) or 0)
+                        for s in savings
+                        if str(s.get("status", "")).lower().strip()
+                        not in ("matured", "canceled", "cancelled")
+                    )
+
+                    # -------------------------
+                    # 투자 요약
+                    # -------------------------
+                    inv_text, inv_total = _get_invest_summary_by_student_id(sid)
+
+                    # -------------------------
+                    # 직업 / 신용
+                    # -------------------------
+                    role_name = _get_role_name_by_student_id(sid)
+                    credit_score, credit_grade = _safe_credit(sid)
+
+                    # -------------------------
+                    # 총자산
+                    # -------------------------
+                    asset_total = int(bal_now) + int(sv_total) + int(inv_total)
+
+                    collapsed = _fmt_admin_one_line(
+                        no=no,
+                        name=nm,
+                        asset_total=asset_total,
+                        bal_now=bal_now,
+                        sv_total=sv_total,
+                        inv_text=inv_text,
+                        inv_total=inv_total,
+                        role_name=role_name,
+                        credit_score=credit_score,
+                        credit_grade=credit_grade,
+                    )
+
+                    with st.expander(collapsed, expanded=False):
+                        # -------------------------
+                        # 통장내역(최신 120)
+                        # -------------------------
+                        st.markdown("### 📒 통장내역")
+                        txr = api_get_txs_by_student_id(sid, limit=120)
+                        if not txr.get("ok"):
+                            st.error(txr.get("error", "내역을 불러오지 못했어요."))
+                        else:
+                            df_tx = pd.DataFrame(txr.get("rows", []))
+                            if df_tx.empty:
+                                st.info("거래 내역이 없어요.")
+                            else:
+                                df_tx = df_tx.sort_values(
+                                    "created_at_utc",
+                                    ascending=False
+                                )
+                                render_tx_table(df_tx)
+
+if "📈 투자" in tabs:
+    with tab_map["📈 투자"]:
+        _render_invest_admin_like(
+            inv_admin_ok_flag=bool(is_admin),
+            force_is_admin=bool(is_admin),
+            my_student_id=my_student_id,
+            login_name=login_name,
+            login_pin=login_pin,
+        )
 if "👥 계정 정보/활성화" in tabs:
     with tab_map["👥 계정 정보/활성화"]:
         st.subheader("📋 계정정보 / 활성화 관리")
@@ -4953,6 +7404,219 @@ if "👥 계정 정보/활성화" in tabs:
         if not is_admin:
             st.error("관리자 전용 탭입니다.")
             st.stop()
+
+        # -------------------------------------------------
+        # 🔐 학생별 관리자 탭/관리자기능 권한 부여/회수 (관리자만)
+        #
+        # 1) "tab::<탭이름>"  : 학생에게 '관리자 탭' 자체를 추가로 노출(기본 탭이 아닌 것들)
+        # 2) "admin::<탭이름>": 이미 학생에게 기본으로 보이는 탭 안에서 '관리자 기능(관리 UI)'을 열어줌
+        #    - 💰보상/벌금(관리자)  -> admin::🏦 내 통장
+        #    - 🏦 은행(적금)(관리자)      -> admin::🏦 은행(적금)
+        #    - 📈 투자(관리자)            -> admin::📈 투자
+        # -------------------------------------------------
+        st.markdown("### 🔐 학생별 관리자 탭 권한 부여/회수")
+        st.caption("특정 학생에게 '관리자 탭' 또는 '관리자 기능(같은 탭 안)' 권한을 부여합니다. (👥 계정 정보/활성화 탭은 제외)")
+
+        # ✅ 부여 가능한 항목(탭/관리자기능)
+        # - (관리자기능) 항목은 학생에게 기본으로 보이는 탭 안에서 관리자 UI를 열어주는 용도입니다.
+        GRANT_OPTIONS = [
+            ("💰보상/벌금(관리자)", ("admin", "🏦 내 통장")),
+            ("🏦 은행(적금)(관리자)", ("admin", "🏦 은행(적금)")),
+            ("📈 투자(관리자)", ("admin", "📈 투자")),
+        ] + [
+            (t, ("tab", t))
+            for t in ALL_TABS
+            if t not in ("👥 계정 정보/활성화", "🏦 내 통장", "🏦 은행(적금)", "📈 투자")
+        ]
+
+        # ✅ 탭별로 함께 부여할 기능 권한(조작 가능하게)
+        TAB_BUNDLE = {
+            "🏛️ 국세청(국고)": ["treasury_read", "treasury_write"],
+            "📊 통계청": ["stats_write"],
+            "💳 신용등급": ["credit_write"],
+            "💼 직업/월급": ["jobs_write"],
+            "🏦 은행(적금)": ["bank_read", "bank_write"],
+            "🗓️ 일정": ["schedule_read", "schedule_write"],
+        }
+
+        # ✅ 학생 목록(활성 학생)
+        docs_perm = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
+        stu_list = []
+        for d in docs_perm:
+            x = d.to_dict() or {}
+            try:
+                no = int(x.get("no", 0) or 0)
+            except Exception:
+                no = 0
+            name = str(x.get("name", "") or "")
+            extra = x.get("extra_permissions", []) or []
+            if not isinstance(extra, list):
+                extra = []
+            stu_list.append({
+                "doc_id": d.id,
+                "no": no,
+                "name": name,
+                "extra": [str(v) for v in extra if str(v).strip()]
+            })
+
+        stu_list = sorted(stu_list, key=lambda r: (r.get("no", 9999), r.get("name", "")))
+
+        def _stu_label(r):
+            n = int(r.get("no", 0) or 0)
+            nm = str(r.get("name", "") or "")
+            return f"{n:02d} {nm}".strip()
+
+        by_label = {_stu_label(r): r for r in stu_list}
+        opt_labels = [lab for (lab, _v) in GRANT_OPTIONS]
+        opt_map = {lab: v for (lab, v) in GRANT_OPTIONS}
+
+        cpa, cpb = st.columns([2, 3])
+        with cpa:
+            sel_opt_label = st.selectbox("부여할 항목 선택", opt_labels, key="perm_sel_opt_label_v2")
+            sel_kind, sel_tab_internal = opt_map.get(sel_opt_label)
+        with cpb:
+            sel_students = st.multiselect(
+                "대상 학생 선택(복수 가능)",
+                options=list(by_label.keys()),
+                default=[],
+                key="perm_sel_students_v2",
+            )
+
+        def _keys_for_selection(kind: str, tab_internal: str):
+            # kind: "tab" or "admin"
+            if kind == "admin":
+                base = [f"admin::{tab_internal}"]
+            else:
+                base = [f"tab::{tab_internal}"]
+            base += TAB_BUNDLE.get(tab_internal, [])
+            # 중복 제거
+            out, seen = [], set()
+            for k in base:
+                k = str(k)
+                if k and (k not in seen):
+                    seen.add(k)
+                    out.append(k)
+            return out
+
+        def _update_student_extra(doc_id: str, add_keys=None, remove_keys=None, clear_all=False):
+            add_keys = add_keys or []
+            remove_keys = remove_keys or []
+            ref = db.collection("students").document(str(doc_id))
+            snap = ref.get()
+            cur = []
+            if snap.exists:
+                cur0 = (snap.to_dict() or {}).get("extra_permissions", []) or []
+                if isinstance(cur0, list):
+                    cur = [str(v) for v in cur0 if str(v).strip()]
+            cur_set = set(cur)
+            if clear_all:
+                cur_set = set()
+            for k in add_keys:
+                cur_set.add(str(k))
+            for k in remove_keys:
+                cur_set.discard(str(k))
+            ref.update({"extra_permissions": sorted(list(cur_set))})
+
+        g1, g2, g3, g4 = st.columns([1, 1, 1, 2])
+        with g1:
+            btn_grant = st.button("➕ 권한 부여", use_container_width=True, key="perm_btn_grant_v2")
+        with g2:
+            btn_revoke = st.button("➖ 권한 회수", use_container_width=True, key="perm_btn_revoke_v2")
+        with g3:
+            confirm_all = st.checkbox("전체 권환 선택", key="perm_confirm_revoke_all_v2")
+        with g4:
+            btn_revoke_all = st.button(
+                "🔥 전체 권한 회수",
+                use_container_width=True,
+                disabled=(not confirm_all),
+                key="perm_btn_revoke_all_v2",
+            )
+
+        if (btn_grant or btn_revoke) and (not sel_students):
+            st.warning("먼저 학생을 선택해 주세요.")
+        elif btn_grant:
+            keys = _keys_for_selection(sel_kind, sel_tab_internal)
+            n = 0
+            for lab in sel_students:
+                r = by_label.get(lab)
+                if not r:
+                    continue
+                _update_student_extra(r["doc_id"], add_keys=keys)
+                n += 1
+            st.success(f"권한 부여 완료: {n}명")
+            st.rerun()
+        elif btn_revoke:
+            keys = _keys_for_selection(sel_kind, sel_tab_internal)
+            n = 0
+            for lab in sel_students:
+                r = by_label.get(lab)
+                if not r:
+                    continue
+                _update_student_extra(r["doc_id"], remove_keys=keys)
+                n += 1
+            st.success(f"권한 회수 완료: {n}명")
+            st.rerun()
+
+        if btn_revoke_all and confirm_all:
+            docs_perm3 = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
+            n = 0
+            for d in docs_perm3:
+                db.collection("students").document(d.id).update({"extra_permissions": []})
+                n += 1
+            st.success(f"전체 학생 권한 전체 회수 완료: {n}명")
+            st.rerun()
+
+        # -------------------------------------------------
+        # 📌 권한 부여 현황 표
+        # -------------------------------------------------
+        st.markdown("### 📌 권한 부여 현황")
+        st.caption("students.extra_permissions의 tab:: / admin:: 값을 기준으로 표시합니다.")
+
+        docs_perm2 = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
+        rows_status = []
+        for d in docs_perm2:
+            x = d.to_dict() or {}
+            extra = x.get("extra_permissions", []) or []
+            if not isinstance(extra, list):
+                extra = []
+            tab_names = [str(k).replace("tab::", "", 1) for k in extra if isinstance(k, str) and k.startswith("tab::")]
+            admin_tabs = [str(k).replace("admin::", "", 1) for k in extra if isinstance(k, str) and k.startswith("admin::")]
+
+            # 표시용(관리자기능은 라벨을 보기 좋게 바꿈)
+            admin_disp = []
+            for t in admin_tabs:
+                if t == "🏦 내 통장":
+                    admin_disp.append("💰보상/벌금(관리자)")
+                elif t == "🏦 은행(적금)":
+                    admin_disp.append("🏦 은행(적금)(관리자)")
+                elif t == "📈 투자":
+                    admin_disp.append("📈 투자(관리자)")
+                else:
+                    admin_disp.append(f"{t}(관리자)")
+
+            if (not tab_names) and (not admin_disp):
+                continue
+
+            try:
+                no = int(x.get("no", 0) or 0)
+            except Exception:
+                no = 0
+            nm = str(x.get("name", "") or "")
+            rows_status.append({
+                "번호": no,
+                "이름": nm,
+                "추가 탭(tab::)": ", ".join(tab_names) if tab_names else "",
+                "관리자 기능(admin::)": ", ".join(admin_disp) if admin_disp else "",
+            })
+
+        df_status = pd.DataFrame(rows_status) if rows_status else pd.DataFrame(columns=["번호","이름","추가 탭(tab::)","관리자 기능(admin::)"])
+        if not df_status.empty:
+            df_status = df_status.sort_values(["번호","이름"]).reset_index(drop=True)
+
+        st.dataframe(df_status, use_container_width=True, hide_index=True)
+
+        # -------------------------------------------------
+        # ✅ (탭 상단) 엑셀 일괄 계정 추가 + 샘플 다운로드
 
         # -------------------------------------------------
         # ✅ (탭 상단) 엑셀 일괄 계정 추가 + 샘플 다운로드
@@ -4965,8 +7629,8 @@ if "👥 계정 정보/활성화" in tabs:
         import io
         sample_df = pd.DataFrame(
             [
-                {"번호": 1, "이름": "홍길동", "비밀번호": "1234"},
-                {"번호": 2, "이름": "김철수", "비밀번호": "2345"},
+                {"번호": 1, "이름": "홍길동", "비밀번호": "1234", "입출금활성화": True, "투자활성화": True},
+                {"번호": 2, "이름": "김철수", "비밀번호": "2345", "입출금활성화": True, "투자활성화": False},
             ]
         )
         bio = io.BytesIO()
@@ -4993,6 +7657,13 @@ if "👥 계정 정보/활성화" in tabs:
                     if not need_cols.issubset(set(df_up.columns)):
                         st.error("엑셀 컬럼이 부족합니다. 최소: 번호, 이름, 비밀번호")
                         st.stop()
+
+                    # 활성화 컬럼이 없으면 기본 True
+                    if "입출금활성화" not in df_up.columns:
+                        df_up["입출금활성화"] = True
+                    if "투자활성화" not in df_up.columns:
+                        df_up["투자활성화"] = True
+
                     # 현재 active 학생들 맵(번호->docid, 이름->docid)
                     cur_docs = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
                     by_no = {}
@@ -5021,11 +7692,17 @@ if "👥 계정 정보/활성화" in tabs:
                         if not name or not pin_ok(pin):
                             skipped += 1
                             continue
+
+                        io_ok = bool(r.get("입출금활성화", True))
+                        inv_ok = bool(r.get("투자활성화", True))
+
                         payload = {
                             "no": int(no),
                             "name": name,
                             "pin": pin,
                             "is_active": True,
+                            "io_enabled": io_ok,
+                            "invest_enabled": inv_ok,
                         }
 
                         # ✅ 번호 우선 업데이트, 없으면 이름으로 업데이트, 없으면 신규 생성
@@ -5039,8 +7716,6 @@ if "👥 계정 정보/활성화" in tabs:
                             db.collection("students").document().set(
                                 {
                                     **payload,
-                                    "io_enabled": True,
-                                    "invest_enabled": True,
                                     "balance": 0,
                                     "role_id": "",
                                     "created_at": firestore.SERVER_TIMESTAMP,
@@ -5116,6 +7791,7 @@ if "👥 계정 정보/활성화" in tabs:
                     st.warning("삭제할 계정을 체크하세요.")
                 else:
                     st.session_state._delete_targets = sel["_sid"].tolist()
+
         # 삭제 확인
         if "_delete_targets" in st.session_state:
             st.warning("정말 삭제하시겠습니까?")
@@ -5141,6 +7817,11 @@ if "👥 계정 정보/활성화" in tabs:
         #   - '회색 하이라이트'는 data_editor가 직접 지원이 어려워서,
         #     선택 행을 아래에 '회색 강조 미리보기'로 추가 표시(대신 확실히 보임)
         # -------------------------------------------------
+        # ✅ (PATCH) 예전 세션에 남아있을 수 있는 컬럼 제거(화면/편집에서 완전히 숨김)
+        st.session_state.account_df = st.session_state.account_df.drop(
+            columns=["입출금활성화", "투자활성화"], errors="ignore"
+        )
+        
         show_df = st.session_state.account_df.drop(columns=["_sid"], errors="ignore")
 
         # ✅ 표 높이: 화면에 최대한 크게(표 안 스크롤 최소화)
@@ -5183,8 +7864,8 @@ if "💼 직업/월급" in tabs:
     with tab_map["💼 직업/월급"]:
         st.subheader("💼 직업/월급 시스템")
 
-        if not is_admin:
-            st.info("관리자 전용 탭입니다.")
+        if not (is_admin or has_tab_access(my_perms, "💼 직업/월급", is_admin)):
+            st.info("접근 권한이 없습니다.")
             st.stop()
 
         # -------------------------------------------------
@@ -5311,20 +7992,41 @@ if "💼 직업/월급" in tabs:
         def _month_key(dt: datetime) -> str:
             return f"{dt.year:04d}-{dt.month:02d}"
 
-        def _paylog_id(month_key: str, student_id: str) -> str:
-            return f"{month_key}_{student_id}"
+        def _paylog_id(month_key: str, student_id: str, job_id: str = "") -> str:
+            # ✅ 월급 지급 로그는 '학생당 1개'가 아니라 '학생+직업당 1개'로 기록
+            job_id = str(job_id or "").strip() or "_"
+            return f"{month_key}_{student_id}_{job_id}"
 
-        def _already_paid_this_month(month_key: str, student_id: str) -> bool:
-            snap = db.collection("payroll_log").document(_paylog_id(month_key, student_id)).get()
-            return bool(snap.exists)
+        def _already_paid_this_month(month_key: str, student_id: str, job_id: str = "", job_name: str = "") -> bool:
+            """이번 달 해당 학생/해당 직업에 대해 이미 월급이 지급되었는지 확인
+            - 신규: payroll_log/{YYYY-MM}_{studentId}_{jobId}
+            - 레거시(호환): payroll_log/{YYYY-MM}_{studentId} 가 있으면, 저장된 job 이름이 같을 때만 True
+            """
+            # 1) 신규 키
+            snap = db.collection("payroll_log").document(_paylog_id(month_key, student_id, job_id)).get()
+            if bool(snap.exists):
+                return True
 
-        def _write_paylog(month_key: str, student_id: str, amount: int, job_name: str, method: str):
-            db.collection("payroll_log").document(_paylog_id(month_key, student_id)).set(
+            # 2) 레거시 키(기존 데이터 호환)
+            legacy_id = f"{month_key}_{student_id}"
+            legacy = db.collection("payroll_log").document(legacy_id).get()
+            if legacy.exists:
+                ld = legacy.to_dict() or {}
+                legacy_job = str(ld.get("job", "") or "")
+                # 레거시는 "학생당 1개"로 덮어쓰던 구조였으므로,
+                # 현재 지급하려는 직업과 이름이 같을 때만 '지급됨'으로 간주
+                if legacy_job and (legacy_job == str(job_name or "")):
+                    return True
+            return False
+
+        def _write_paylog(month_key: str, student_id: str, amount: int, job_name: str, method: str, job_id: str = ""):
+            db.collection("payroll_log").document(_paylog_id(month_key, student_id, job_id)).set(
                 {
                     "month": month_key,
                     "student_id": student_id,
                     "amount": int(amount),
                     "job": str(job_name or ""),
+                    "job_id": str(job_id or ""),
                     "method": str(method or ""),  # "auto" / "manual"
                     "paid_at": firestore.SERVER_TIMESTAMP,
                 },
@@ -5365,6 +8067,7 @@ if "💼 직업/월급" in tabs:
 
             for d in q:
                 x = d.to_dict() or {}
+                job_id = str(d.id)
                 job_name = str(x.get("job", "") or "")
                 gross = int(x.get("salary", 0) or 0)
                 net_amt = int(_calc_net(gross, cfg) or 0)
@@ -5379,25 +8082,25 @@ if "💼 직업/월급" in tabs:
                         continue
 
                     # ✅ 이번 달에 수동/자동 지급 기록이 있으면 자동 지급은 패스
-                    if _already_paid_this_month(mkey, sid):
+                    if _already_paid_this_month(mkey, sid, job_id=job_id, job_name=job_name):
                         skip_cnt += 1
                         continue
 
                     nm = id_to_name.get(sid, "")
-                    memo = f"월급 자동지급({mkey}) {job_name}" + (f" - {nm}" if nm else "")
+                    memo = f"월급 {job_name}"
                     res = _pay_one_student(sid, net_amt, memo)
                                         # ✅ (국고 세입) 월급 공제액을 국고로 입금
                     deduction = int(max(0, gross - net_amt))
                     if deduction > 0:
                         api_add_treasury_tx(
                             admin_pin=ADMIN_PIN,
-                            memo=f"월급 공제 세입({mkey}) {job_name}",
+                            memo=f"월급 공제 세입({mkey}) {job_name}" + (f" - {nm}" if nm else ""),
                             income=deduction,
                             expense=0,
                             actor="system_salary",
                         )
                     if res.get("ok"):
-                        _write_paylog(mkey, sid, net_amt, job_name, method="auto")
+                        _write_paylog(mkey, sid, net_amt, job_name, method="auto", job_id=job_id)
                         paid_cnt += 1
                     else:
                         err_cnt += 1
@@ -5413,7 +8116,7 @@ if "💼 직업/월급" in tabs:
 
         # ✅ 자동지급 조건이면 즉시 한번 실행(해당 날짜일 때만 실제 지급됨)
         _run_auto_payroll_if_due(payroll_cfg)
-
+        
         with st.expander("💸 월급 지급 설정", expanded=False):
             cc1, cc2, cc3 = st.columns([1.4, 1.2, 1.4])
 
@@ -5463,15 +8166,10 @@ if "💼 직업/월급" in tabs:
                 for sid in list(x.get("assigned_ids", []) or []):
                     sid = str(sid or "").strip()
                     if sid:
-                        targets.append((sid, net_amt, job_name, gross))
+                        targets.append((sid, net_amt, job_name, gross, str(d.id)))
+            # ✅ 여러 직업 배정 허용: (학생+직업) 단위로 각각 지급
 
-            # 중복 학생(여러 직업에 배정되는 경우) 방지: 마지막 것만 남김
-            dedup = {}
-            for sid, amt, jb, gross in targets:
-                dedup[sid] = (amt, jb, gross)
-            targets = [(sid, v[0], v[1], v[2]) for sid, v in dedup.items()]
-
-            already_any = any(_already_paid_this_month(cur_mkey, sid) for sid, *_ in targets)
+            already_any = any(_already_paid_this_month(cur_mkey, sid, job_id=jid, job_name=jb) for sid, _, jb, _, jid in targets)
 
             if st.button("💸 수동지급(이번 달 즉시 지급)", use_container_width=True, key="payroll_manual_btn"):
                 # 이미 지급된 적 있으면 확인창 띄우기
@@ -5505,16 +8203,16 @@ if "💼 직업/월급" in tabs:
                 id_to_name2 = {a.get("student_id"): a.get("name") for a in accs2 if a.get("student_id")}
 
                 paid_cnt, err_cnt = 0, 0
-                for sid, amt, jb, gross in targets:
+                for sid, amt, jb, gross, job_id2 in targets:
                     nm = id_to_name2.get(sid, "")
-                    memo = f"월급 수동지급({cur_mkey}) {jb}" + (f" - {nm}" if nm else "")
+                    memo = f"월급 {jb}"
                     res = _pay_one_student(sid, int(amt), memo)
                     # ✅ (국고 세입) 월급 공제액을 국고로 입금
                     deduction = int(max(0, int(gross) - int(amt))) if "gross" in locals() else 0
                     if deduction > 0:
                         api_add_treasury_tx(
                             admin_pin=ADMIN_PIN,
-                            memo=f"월급 공제 세입({cur_mkey}) {jb}",
+                            memo=f"월급 공제 세입({cur_mkey}) {jb}" + (f" - {nm}" if nm else ""),
                             income=deduction,
                             expense=0,
                             actor="system_salary",
@@ -5522,7 +8220,7 @@ if "💼 직업/월급" in tabs:
 
                     if res.get("ok"):
                         # ✅ 수동지급도 이번달 지급 기록 남김(자동 패스 조건 충족)
-                        _write_paylog(cur_mkey, sid, int(amt), jb, method="manual")
+                        _write_paylog(cur_mkey, sid, int(amt), jb, method="manual", job_id=job_id2)
                         paid_cnt += 1
                     else:
                         err_cnt += 1
@@ -5574,177 +8272,158 @@ if "💼 직업/월급" in tabs:
         st.markdown("### 📋 직업/월급 목록")
         st.caption("• 아래에 직업을 추가/수정하면 이 리스트에 반영됩니다. • 체크 후 ⬆️⬇️🗑️ 버튼으로 순서 이동/삭제가 됩니다.")
 
-        # -------------------------
-        # ✅ 선택(체크박스) 세션 상태 준비 (버튼보다 먼저!)
-        # -------------------------
-        if "job_sel" not in st.session_state:
-            st.session_state.job_sel = {}
+        # -------------------------------------------------
+        # ✅ (PATCH) 직업 지정/회수 UI (계정정보/활성화 탭의 권한 부여 방식과 동일 UX)
+        #   - 기존 데이터 구조(job_salary.assigned_ids / student_count) 유지
+        #   - 기존 월급 자동/수동지급/공제/국고 로직은 그대로 사용됨
+        # -------------------------------------------------
+        st.markdown("### 🧩 직업 지정 / 회수")
+        st.caption("직업을 선택한 뒤, 학생을 선택하고 ‘고용/해제’ 버튼을 누르세요. (직업별 정원(student_count) 내에서 배정됩니다.)")
 
-        current_ids = [rr["_id"] for rr in rows]
-        for rid0 in current_ids:
-            st.session_state.job_sel.setdefault(rid0, False)
-        for rid0 in list(st.session_state.job_sel.keys()):
-            if rid0 not in current_ids:
-                st.session_state.job_sel.pop(rid0, None)
+        # 직업 선택
+        job_pick_labels = [f"{r['order']} | {r['job']} (월급 {int(r['salary'])})" for r in rows]
+        job_pick_map = {lab: r["_id"] for lab, r in zip(job_pick_labels, rows)}
 
-        def _selected_job_ids():
-            return [rid0 for rid0 in current_ids if bool(st.session_state.job_sel.get(rid0, False))]
+        assign_c1, assign_c2 = st.columns([1.2, 2.0])
+        with assign_c1:
+            sel_job_label = st.selectbox("부여할 직업 선택", job_pick_labels, key="job_assign_pick2") if job_pick_labels else None
+        with assign_c2:
+            sel_students_labels = st.multiselect("대상 학생 선택(복수)", [lab for lab in acc_options if lab != "(선택 없음)"], key="job_assign_students2")
 
-        # -------------------------
-        # ✅ 일괄 순서 이동
-        # -------------------------
-        def _bulk_move(direction: str):
-            sel_ids = _selected_job_ids()
-            if not sel_ids:
-                st.warning("먼저 체크(선택)하세요.")
-                return
-
-            # 최신 rows 다시 읽기(순서 꼬임 방지)
-            _rows = _list_job_rows()
-            if not _rows:
-                return
-
-            # id -> index 빠른 조회
-            id_to_idx = {r["_id"]: i for i, r in enumerate(_rows)}
-            selected = set([sid for sid in sel_ids if sid in id_to_idx])
-
-            if not selected:
-                st.warning("선택된 항목을 찾지 못했어요.")
-                return
-
-            # 위로: 앞에서부터 스캔하며 '선택'이 '비선택' 앞에 있으면 swap
-            # 아래로: 뒤에서부터 스캔
-            if direction == "up":
-                scan = range(len(_rows))
-                step = -1
-            else:
-                scan = range(len(_rows) - 1, -1, -1)
-                step = 1
-
-            batch = db.batch()
-            swapped = 0
-
-            for i in scan:
-                cur = _rows[i]
-                cur_id = cur["_id"]
-                if cur_id not in selected:
-                    continue
-
-                j = i + step
-                if j < 0 or j >= len(_rows):
-                    continue
-
-                prev = _rows[j]
-                prev_id = prev["_id"]
-
-                # 선택끼리는 묶어서 이동(선택과 비선택 사이만 swap)
-                if prev_id in selected:
-                    continue
-
-                # order swap
-                a_id, a_order = cur_id, int(cur.get("order", 999999) or 999999)
-                b_id, b_order = prev_id, int(prev.get("order", 999999) or 999999)
-
-                batch.update(db.collection("job_salary").document(a_id), {"order": b_order})
-                batch.update(db.collection("job_salary").document(b_id), {"order": a_order})
-
-                # 로컬 리스트에서도 swap 반영(연쇄 이동 안정)
-                _rows[i], _rows[j] = _rows[j], _rows[i]
-                swapped += 1
-
-            if swapped > 0:
-                batch.commit()
-                toast("순서 이동 완료!", icon="✅")
-            else:
-                st.info("더 이동할 수 없습니다.")
-
-        # -------------------------
-        # ✅ 일괄 삭제 준비(확인창 띄우기)
-        # -------------------------
-        def _bulk_delete_prepare():
-            sel_ids = _selected_job_ids()
-            if not sel_ids:
-                st.warning("삭제할 항목을 체크하세요.")
-                return
-            st.session_state["_job_bulk_delete_ids"] = sel_ids
-
-        # -------------------------
-        # ✅ 상단 버튼(⬆️⬇️🗑️)
-        # -------------------------
-        btn1, btn2, btn3 = st.columns(3)
+        btn1, btn2 = st.columns([1, 1])
         with btn1:
-            if st.button("⬆️", use_container_width=True, key="job_bulk_up"):
-                _bulk_move("up")
-                st.rerun()
+            if st.button("➕ 고용", use_container_width=True, key="job_assign_hire_btn2"):
+                if not sel_job_label:
+                    st.warning("먼저 직업을 선택하세요.")
+                elif not sel_students_labels:
+                    st.warning("대상 학생을 선택하세요.")
+                else:
+                    rid = job_pick_map.get(sel_job_label)
+                    if rid:
+                        ref = db.collection("job_salary").document(rid)
+                        snap = ref.get()
+                        if snap.exists:
+                            x = snap.to_dict() or {}
+                            cnt = max(0, int(x.get("student_count", 1) or 1))
+                            assigned = list(x.get("assigned_ids", []) or [])
+
+                            # 길이 정규화
+                            if cnt == 0:
+                                assigned = []
+                            else:
+                                if len(assigned) < cnt:
+                                    assigned = assigned + [""] * (cnt - len(assigned))
+                                if len(assigned) > cnt:
+                                    assigned = assigned[:cnt]
+
+                            changed = False
+                            full = 0
+                            for lab in sel_students_labels:
+                                sid = label_to_id.get(lab, "")
+                                if not sid:
+                                    continue
+                                # 이미 배정되어 있으면 스킵
+                                if sid in assigned:
+                                    continue
+                                # 빈 자리 찾기
+                                try:
+                                    k = assigned.index("")
+                                except ValueError:
+                                    k = -1
+                                if k == -1:
+                                    full += 1
+                                    continue
+                                assigned[k] = sid
+                                changed = True
+
+                            if changed:
+                                ref.update({"assigned_ids": assigned})
+                                toast("고용 완료!", icon="✅")
+                                if full > 0:
+                                    st.warning(f"정원이 가득 차서 {full}명은 배정되지 않았어요. (학생수/정원 증가 후 다시 시도)")
+                                st.rerun()
+                            else:
+                                st.info("변경된 내용이 없습니다. (이미 배정되었거나 정원이 가득 찼을 수 있어요.)")
+
         with btn2:
-            if st.button("⬇️", use_container_width=True, key="job_bulk_dn"):
-                _bulk_move("down")
-                st.rerun()
-        with btn3:
-            if st.button("🗑️", use_container_width=True, key="job_bulk_del"):
-                _bulk_delete_prepare()
-                st.rerun()
+            if st.button("➖ 해제", use_container_width=True, key="job_assign_fire_btn2"):
+                if not sel_job_label:
+                    st.warning("먼저 직업을 선택하세요.")
+                elif not sel_students_labels:
+                    st.warning("대상 학생을 선택하세요.")
+                else:
+                    rid = job_pick_map.get(sel_job_label)
+                    if rid:
+                        ref = db.collection("job_salary").document(rid)
+                        snap = ref.get()
+                        if snap.exists:
+                            x = snap.to_dict() or {}
+                            cnt = max(0, int(x.get("student_count", 1) or 1))
+                            assigned = list(x.get("assigned_ids", []) or [])
 
-        # -------------------------
-        # ✅ 일괄 삭제 확인
-        # -------------------------
-        if "_job_bulk_delete_ids" in st.session_state:
-            st.warning("체크된 직업을 삭제하시겠습니까?")
-            y, n = st.columns(2)
-            with y:
-                if st.button("예", key="job_bulk_del_yes", use_container_width=True):
-                    del_ids = list(st.session_state.get("_job_bulk_delete_ids", []))
-                    for rid0 in del_ids:
-                        db.collection("job_salary").document(rid0).delete()
-                        st.session_state.job_sel.pop(rid0, None)
-                    st.session_state.pop("_job_bulk_delete_ids", None)
-                    toast("삭제 완료", icon="🗑️")
-                    st.rerun()
-            with n:
-                if st.button("아니오", key="job_bulk_del_no", use_container_width=True):
-                    st.session_state.pop("_job_bulk_delete_ids", None)
-                    st.rerun()
+                            # 길이 정규화
+                            if cnt == 0:
+                                assigned = []
+                            else:
+                                if len(assigned) < cnt:
+                                    assigned = assigned + [""] * (cnt - len(assigned))
+                                if len(assigned) > cnt:
+                                    assigned = assigned[:cnt]
+
+                            sel_ids = [label_to_id.get(lab, "") for lab in sel_students_labels]
+                            sel_ids = [sid for sid in sel_ids if sid]
+
+                            new_assigned = [("" if sid in sel_ids else sid) for sid in assigned]
+                            if new_assigned != assigned:
+                                ref.update({"assigned_ids": new_assigned})
+                                toast("해제 완료!", icon="✅")
+                                st.rerun()
+                            else:
+                                st.info("해제할 배정이 없습니다.")
+
 
         # -------------------------------------------------
-        # ✅ 열 제목(헤더) - 내용 columns 비율과 동일하게 맞춰 정렬
+        # ✅ 전체 직업 해제 (모든 직업에서 배정 학생 전부 해제)
         # -------------------------------------------------
-        st.markdown(
-            """
-            <style>
-            .jobhdr { font-weight: 900; color:#111; padding: 6px 4px; }
-            .jobhdr-center { display:flex; align-items:center; justify-content:center; }
-            .jobhdr-left { display:flex; align-items:center; justify-content:flex-start; }
-            .jobhdr-line { border-bottom: 2px solid #ddd; margin: 6px 0 10px 0; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+        all_off_cols = st.columns([1.0, 2.0])
+        with all_off_cols[0]:
+            all_clear_chk = st.checkbox("전체 직업 해제", value=False, key="job_assign_clear_all_chk")
+        with all_off_cols[1]:
+            if st.button("🔥 전체 직업 해제", use_container_width=True, key="job_assign_clear_all_btn", disabled=(not bool(all_clear_chk))):
+                try:
+                    _rows2 = _list_job_rows()
+                    batch = db.batch()
+                    for rr in _rows2:
+                        rid2 = rr["_id"]
+                        cnt2 = max(0, int(rr.get("student_count", 0) or 0))
+                        # 빈 슬롯으로 초기화(정원 유지)
+                        empty_ids = [""] * cnt2 if cnt2 > 0 else []
+                        batch.update(db.collection("job_salary").document(rid2), {"assigned_ids": empty_ids})
+                    batch.commit()
+                    toast("전체 직업 해제 완료!", icon="✅")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"전체 직업 해제 실패: {e}")
 
-        hdr = st.columns([1.1, 2.2, 1.1, 1.2, 1.4, 4.0])
-        with hdr[0]:
-            st.markdown("<div class='jobhdr jobhdr-center'>선택/순</div>", unsafe_allow_html=True)
-        with hdr[1]:
-            st.markdown("<div class='jobhdr jobhdr-left'>직업</div>", unsafe_allow_html=True)
-        with hdr[2]:
-            st.markdown("<div class='jobhdr jobhdr-center'>월급</div>", unsafe_allow_html=True)
-        with hdr[3]:
-            st.markdown("<div class='jobhdr jobhdr-center'>실수령</div>", unsafe_allow_html=True)
-        with hdr[4]:
-            st.markdown("<div class='jobhdr jobhdr-center'>학생수</div>", unsafe_allow_html=True)
-        with hdr[5]:
-            st.markdown("<div class='jobhdr jobhdr-left'>배정 계정</div>", unsafe_allow_html=True)
+        st.divider()
 
-        st.markdown("<div class='jobhdr-line'></div>", unsafe_allow_html=True)
+        # -------------------------------------------------
+        # ✅ (PATCH) 직업 현황(학생 기준 표) — 학생이 직업 여러 개면 여러 행으로 표시
+        # -------------------------------------------------
+        st.markdown("### 👥 직업 현황")
+        status_rows = []
+        # student_id -> (no, name) 빠른 조회
+        id_to_no_name = {r["student_id"]: (r["no"], r["name"]) for r in acc_rows}
 
-        for i, r in enumerate(rows):
+        for r in rows:
             rid = r["_id"]
-            order = int(r["order"])
             job = r["job"]
             salary = int(r["salary"])
+            net = int(_calc_net(salary, cfg) or 0)
             cnt = max(0, int(r.get("student_count", 1) or 1))
             assigned_ids = list(r.get("assigned_ids", []) or [])
 
-            # assigned 길이를 student_count에 맞추기 (cnt=0이면 빈 리스트)
+            # 길이 정규화
             if cnt == 0:
                 assigned_ids = []
             else:
@@ -5753,90 +8432,275 @@ if "💼 직업/월급" in tabs:
                 if len(assigned_ids) > cnt:
                     assigned_ids = assigned_ids[:cnt]
 
-            net = _calc_net(salary, cfg)
-
-            rowc = st.columns([0.8, 1.0, 2.6, 1.3, 1.3, 1.6, 4.0])
-
-            # ✅ 선택 체크
-            with rowc[0]:
-                st.session_state.job_sel[rid] = st.checkbox(
-                    "",
-                    value=bool(st.session_state.job_sel.get(rid, False)),
-                    key=f"job_sel_{rid}",
-                    label_visibility="collapsed",
+            for sid in assigned_ids:
+                if not sid:
+                    continue
+                no, nm = id_to_no_name.get(sid, (999999, id_to_label.get(sid, "")))
+                status_rows.append(
+                    {"번호": int(no) if str(no).isdigit() else no, "이름": nm, "직업": job, "월급": salary, "실수령액": net}
                 )
 
-            # ✅ 순
-            with rowc[1]:
-                st.markdown(f"<div style='text-align:center;font-weight:900'>{order}</div>", unsafe_allow_html=True)
-
-            # ✅ 직업
-            with rowc[2]:
-                st.markdown(f"<div style='font-weight:900'>{job}</div>", unsafe_allow_html=True)
-
-            # ✅ 월급
-            with rowc[3]:
-                st.markdown(f"<div style='text-align:center;font-weight:900'>{salary}</div>", unsafe_allow_html=True)
-
-            # ✅ 실수령
-            with rowc[4]:
-                st.markdown(f"<div style='text-align:center;font-weight:900'>{net}</div>", unsafe_allow_html=True)
-
-            # ✅ 학생수 +/- (기존 로직 그대로)
-            with rowc[5]:
-                st.markdown("<div class='jobcnt-wrap'>", unsafe_allow_html=True)
-                a1, a2, a3 = st.columns([0.9, 1.0, 0.9])
-
-                with a1:
-                    if st.button("➖", key=f"job_cnt_minus_{rid}"):
-                        new_cnt = max(0, cnt - 1)
-                        new_assigned = assigned_ids[:new_cnt] if new_cnt > 0 else []
-                        db.collection("job_salary").document(rid).update(
-                            {"student_count": new_cnt, "assigned_ids": new_assigned}
-                        )
-                        st.rerun()
-
-                with a2:
-                    st.markdown(f"<div class='jobcnt-num'>{cnt}</div>", unsafe_allow_html=True)
-
-                with a3:
-                    if st.button("➕", key=f"job_cnt_plus_{rid}"):
-                        new_cnt = cnt + 1
-                        new_assigned = assigned_ids + [""]
-                        db.collection("job_salary").document(rid).update(
-                            {"student_count": new_cnt, "assigned_ids": new_assigned}
-                        )
-                        st.rerun()
-
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            # ✅ 배정 계정 드롭다운(기존 로직 그대로)
-            with rowc[6]:
-                if cnt > 0:
-                    new_ids = []
-                    for k in range(cnt):
-                        cur_id = assigned_ids[k] if k < len(assigned_ids) else ""
-                        cur_label = id_to_label.get(cur_id, "(선택 없음)") if cur_id else "(선택 없음)"
-
-                        sel = st.selectbox(
-                            f"계정{k+1}",
-                            acc_options,
-                            index=acc_options.index(cur_label) if cur_label in acc_options else 0,
-                            key=f"job_assign_{rid}_{k}",
-                            label_visibility="collapsed",
-                        )
-                        new_ids.append(label_to_id.get(sel, "") if sel != "(선택 없음)" else "")
-
-                    if new_ids != assigned_ids:
-                        db.collection("job_salary").document(rid).update({"assigned_ids": new_ids})
-
-            st.markdown("<div style='margin:0.35rem 0; border-bottom:1px solid #eee;'></div>", unsafe_allow_html=True)
+        if status_rows:
+            df_status = pd.DataFrame(status_rows)
+            # 번호 정렬(문자 섞일 수 있어 안전 처리)
+            try:
+                df_status["번호_정렬"] = pd.to_numeric(df_status["번호"], errors="coerce").fillna(999999).astype(int)
+                df_status = df_status.sort_values(["번호_정렬", "이름", "직업"], kind="mergesort").drop(columns=["번호_정렬"])
+            except Exception:
+                df_status = df_status.sort_values(["번호", "이름", "직업"], kind="mergesort")
+            st.dataframe(df_status[["번호", "이름", "직업", "월급", "실수령액"]], use_container_width=True, hide_index=True)
+        else:
+            st.info("아직 직업이 배정된 학생이 없습니다.")
 
         st.divider()
 
         # -------------------------------------------------
-        # ✅ 하단: 직업 추가/수정 (하우스포인트 템플릿처럼)
+        # ✅ (PATCH) [숨김] 직업/월급 '목록 표' + 순서이동/삭제/정원 +/- UI
+        #   - 기능은 유지(데이터는 그대로)하되 화면에서는 보이지 않게 처리
+        #   - 직업 추가/수정, 직업 지정/회수, 월급 지급(자동/수동)은 그대로 사용
         # -------------------------------------------------
+        if False:
+        # -------------------------
+                # ✅ 선택(체크박스) 세션 상태 준비 (버튼보다 먼저!)
+                # -------------------------
+                if "job_sel" not in st.session_state:
+                    st.session_state.job_sel = {}
+
+                current_ids = [rr["_id"] for rr in rows]
+                for rid0 in current_ids:
+                    st.session_state.job_sel.setdefault(rid0, False)
+                for rid0 in list(st.session_state.job_sel.keys()):
+                    if rid0 not in current_ids:
+                        st.session_state.job_sel.pop(rid0, None)
+
+                def _selected_job_ids():
+                    return [rid0 for rid0 in current_ids if bool(st.session_state.job_sel.get(rid0, False))]
+
+                # -------------------------
+                # ✅ 일괄 순서 이동
+                # -------------------------
+                def _bulk_move(direction: str):
+                    sel_ids = _selected_job_ids()
+                    if not sel_ids:
+                        st.warning("먼저 체크(선택)하세요.")
+                        return
+
+                    # 최신 rows 다시 읽기(순서 꼬임 방지)
+                    _rows = _list_job_rows()
+                    if not _rows:
+                        return
+
+                    # id -> index 빠른 조회
+                    id_to_idx = {r["_id"]: i for i, r in enumerate(_rows)}
+                    selected = set([sid for sid in sel_ids if sid in id_to_idx])
+
+                    if not selected:
+                        st.warning("선택된 항목을 찾지 못했어요.")
+                        return
+
+                    # 위로: 앞에서부터 스캔하며 '선택'이 '비선택' 앞에 있으면 swap
+                    # 아래로: 뒤에서부터 스캔
+                    if direction == "up":
+                        scan = range(len(_rows))
+                        step = -1
+                    else:
+                        scan = range(len(_rows) - 1, -1, -1)
+                        step = 1
+
+                    batch = db.batch()
+                    swapped = 0
+
+                    for i in scan:
+                        cur = _rows[i]
+                        cur_id = cur["_id"]
+                        if cur_id not in selected:
+                            continue
+
+                        j = i + step
+                        if j < 0 or j >= len(_rows):
+                            continue
+
+                        prev = _rows[j]
+                        prev_id = prev["_id"]
+
+                        # 선택끼리는 묶어서 이동(선택과 비선택 사이만 swap)
+                        if prev_id in selected:
+                            continue
+
+                        # order swap
+                        a_id, a_order = cur_id, int(cur.get("order", 999999) or 999999)
+                        b_id, b_order = prev_id, int(prev.get("order", 999999) or 999999)
+
+                        batch.update(db.collection("job_salary").document(a_id), {"order": b_order})
+                        batch.update(db.collection("job_salary").document(b_id), {"order": a_order})
+
+                        # 로컬 리스트에서도 swap 반영(연쇄 이동 안정)
+                        _rows[i], _rows[j] = _rows[j], _rows[i]
+                        swapped += 1
+
+                    if swapped > 0:
+                        batch.commit()
+                        toast("순서 이동 완료!", icon="✅")
+                    else:
+                        st.info("더 이동할 수 없습니다.")
+
+                # -------------------------
+                # ✅ 일괄 삭제 준비(확인창 띄우기)
+                # -------------------------
+                def _bulk_delete_prepare():
+                    sel_ids = _selected_job_ids()
+                    if not sel_ids:
+                        st.warning("삭제할 항목을 체크하세요.")
+                        return
+                    st.session_state["_job_bulk_delete_ids"] = sel_ids
+
+                # -------------------------
+                # ✅ 상단 버튼(⬆️⬇️🗑️)
+                # -------------------------
+                btn1, btn2, btn3 = st.columns(3)
+                with btn1:
+                    if st.button("⬆️", use_container_width=True, key="job_bulk_up"):
+                        _bulk_move("up")
+                        st.rerun()
+                with btn2:
+                    if st.button("⬇️", use_container_width=True, key="job_bulk_dn"):
+                        _bulk_move("down")
+                        st.rerun()
+                with btn3:
+                    if st.button("🗑️", use_container_width=True, key="job_bulk_del"):
+                        _bulk_delete_prepare()
+                        st.rerun()
+
+                # -------------------------
+                # ✅ 일괄 삭제 확인
+                # -------------------------
+                if "_job_bulk_delete_ids" in st.session_state:
+                    st.warning("체크된 직업을 삭제하시겠습니까?")
+                    y, n = st.columns(2)
+                    with y:
+                        if st.button("예", key="job_bulk_del_yes", use_container_width=True):
+                            del_ids = list(st.session_state.get("_job_bulk_delete_ids", []))
+                            for rid0 in del_ids:
+                                db.collection("job_salary").document(rid0).delete()
+                                st.session_state.job_sel.pop(rid0, None)
+                            st.session_state.pop("_job_bulk_delete_ids", None)
+                            toast("삭제 완료", icon="🗑️")
+                            st.rerun()
+                    with n:
+                        if st.button("아니오", key="job_bulk_del_no", use_container_width=True):
+                            st.session_state.pop("_job_bulk_delete_ids", None)
+                            st.rerun()
+
+                # -------------------------------------------------
+                # ✅ 열 제목(헤더) - 내용 columns 비율과 동일하게 맞춰 정렬
+                # -------------------------------------------------
+                st.markdown(
+                    """
+                    <style>
+                    .jobhdr { font-weight: 900; color:#111; padding: 6px 4px; }
+                    .jobhdr-center { display:flex; align-items:center; justify-content:center; }
+                    .jobhdr-left { display:flex; align-items:center; justify-content:flex-start; }
+                    .jobhdr-line { border-bottom: 2px solid #ddd; margin: 6px 0 10px 0; }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                hdr = st.columns([1.1, 2.2, 1.1, 1.2, 1.4])
+                with hdr[0]:
+                    st.markdown("<div class='jobhdr jobhdr-center'>선택/순</div>", unsafe_allow_html=True)
+                with hdr[1]:
+                    st.markdown("<div class='jobhdr jobhdr-left'>직업</div>", unsafe_allow_html=True)
+                with hdr[2]:
+                    st.markdown("<div class='jobhdr jobhdr-center'>월급</div>", unsafe_allow_html=True)
+                with hdr[3]:
+                    st.markdown("<div class='jobhdr jobhdr-center'>실수령</div>", unsafe_allow_html=True)
+                with hdr[4]:
+                    st.markdown("<div class='jobhdr jobhdr-center'>학생수</div>", unsafe_allow_html=True)
+
+                st.markdown("<div class='jobhdr-line'></div>", unsafe_allow_html=True)
+
+                for i, r in enumerate(rows):
+                    rid = r["_id"]
+                    order = int(r["order"])
+                    job = r["job"]
+                    salary = int(r["salary"])
+                    cnt = max(0, int(r.get("student_count", 1) or 1))
+                    assigned_ids = list(r.get("assigned_ids", []) or [])
+
+                    # assigned 길이를 student_count에 맞추기 (cnt=0이면 빈 리스트)
+                    if cnt == 0:
+                        assigned_ids = []
+                    else:
+                        if len(assigned_ids) < cnt:
+                            assigned_ids = assigned_ids + [""] * (cnt - len(assigned_ids))
+                        if len(assigned_ids) > cnt:
+                            assigned_ids = assigned_ids[:cnt]
+
+                    net = _calc_net(salary, cfg)
+
+                    rowc = st.columns([0.8, 1.0, 2.6, 1.3, 1.3, 1.6])
+
+                    # ✅ 선택 체크
+                    with rowc[0]:
+                        st.session_state.job_sel[rid] = st.checkbox(
+                            "",
+                            value=bool(st.session_state.job_sel.get(rid, False)),
+                            key=f"job_sel_{rid}",
+                            label_visibility="collapsed",
+                        )
+
+                    # ✅ 순
+                    with rowc[1]:
+                        st.markdown(f"<div style='text-align:center;font-weight:900'>{order}</div>", unsafe_allow_html=True)
+
+                    # ✅ 직업
+                    with rowc[2]:
+                        st.markdown(f"<div style='font-weight:900'>{job}</div>", unsafe_allow_html=True)
+
+                    # ✅ 월급
+                    with rowc[3]:
+                        st.markdown(f"<div style='text-align:center;font-weight:900'>{salary}</div>", unsafe_allow_html=True)
+
+                    # ✅ 실수령
+                    with rowc[4]:
+                        st.markdown(f"<div style='text-align:center;font-weight:900'>{net}</div>", unsafe_allow_html=True)
+
+                    # ✅ 학생수 +/- (기존 로직 그대로)
+                    with rowc[5]:
+                        st.markdown("<div class='jobcnt-wrap'>", unsafe_allow_html=True)
+                        a1, a2, a3 = st.columns([0.9, 1.0, 0.9])
+
+                        with a1:
+                            if st.button("➖", key=f"job_cnt_minus_{rid}"):
+                                new_cnt = max(0, cnt - 1)
+                                new_assigned = assigned_ids[:new_cnt] if new_cnt > 0 else []
+                                db.collection("job_salary").document(rid).update(
+                                    {"student_count": new_cnt, "assigned_ids": new_assigned}
+                                )
+                                st.rerun()
+
+                        with a2:
+                            st.markdown(f"<div class='jobcnt-num'>{cnt}</div>", unsafe_allow_html=True)
+
+                        with a3:
+                            if st.button("➕", key=f"job_cnt_plus_{rid}"):
+                                new_cnt = cnt + 1
+                                new_assigned = assigned_ids + [""]
+                                db.collection("job_salary").document(rid).update(
+                                    {"student_count": new_cnt, "assigned_ids": new_assigned}
+                                )
+                                st.rerun()
+
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    st.markdown("<div style='margin:0.35rem 0; border-bottom:1px solid #eee;'></div>", unsafe_allow_html=True)
+
+                st.divider()
+
+                # -------------------------------------------------
+                # ✅ 하단: 직업 추가/수정 (하우스포인트 템플릿처럼)
+                # -------------------------------------------------
+        
         st.markdown("### ➕ 직업 추가 / 수정")
 
         pick_labels = ["(새로 추가)"] + [f"{r['order']} | {r['job']} (월급 {int(r['salary'])})" for r in rows]
@@ -5869,7 +8733,6 @@ if "💼 직업/월급" in tabs:
             value=int(edit_row["student_count"]) if edit_row else 1,
             key="job_in_count",
         )
-
         b1, b2, b3 = st.columns([1, 1, 1])
         with b1:
             if st.button("✅ 저장", use_container_width=True, key="job_save_btn"):
@@ -5915,19 +8778,16 @@ if "💼 직업/월급" in tabs:
                     toast("추가 완료!", icon="✅")
                     st.rerun()
 
+        # ✅ 입력 초기화 버튼 삭제 (자리만 빈 칸으로 유지)
         with b2:
-            if st.button("🧹 입력 초기화", use_container_width=True, key="job_clear_btn"):
-                st.session_state.pop("job_in_job", None)
-                st.session_state.pop("job_in_salary", None)
-                st.session_state.pop("job_in_count", None)
-                st.session_state["job_edit_pick"] = "(새로 추가)"
-                st.rerun()
+            st.write("")
 
         with b3:
             if st.button("🗑️ 삭제", use_container_width=True, key="job_delete_btn", disabled=(edit_row is None)):
                 if not edit_row:
                     st.stop()
                 st.session_state._job_delete_id = edit_row["_id"]
+
 
         if "_job_delete_id" in st.session_state:
             st.warning("정말 삭제하시겠습니까?")
@@ -5942,6 +8802,148 @@ if "💼 직업/월급" in tabs:
                 if st.button("아니오", use_container_width=True, key="job_del_no"):
                     st.session_state.pop("_job_delete_id", None)
                     st.rerun()
+        # -------------------------------------------------
+        # ✅ 직업 엑셀 일괄 업로드 (미리보기 + 저장 버튼 반영)
+        # -------------------------------------------------
+        st.markdown("### 📥 직업 엑셀 일괄 업로드")
+        st.caption("엑셀 업로드 후 미리보기 확인 → '저장(반영)'을 눌러야 실제 반영됩니다.")
+
+        import io
+
+        # ✅ 샘플 엑셀 다운로드  (※ 실수령은 자동 계산이므로 컬럼에서 제거)
+        sample_df = pd.DataFrame(
+            [
+                {"순": 1, "직업": "반장", "월급": 500, "학생 수": 1},
+                {"순": 2, "직업": "서기", "월급": 300, "학생 수": 2},
+            ],
+            columns=["순", "직업", "월급", "학생 수"],
+        )
+        bio = io.BytesIO()
+        with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+            sample_df.to_excel(writer, index=False, sheet_name="jobs")
+        bio.seek(0)
+
+        st.download_button(
+            "📄 직업 샘플 엑셀 다운로드",
+            data=bio.getvalue(),
+            file_name="jobs_sample.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="job_sample_down",
+        )
+
+        # ✅ 기존 목록 삭제 여부(저장 시 적용)
+        wipe_before = st.checkbox("⚠️ 저장 시 기존 직업 목록 전체 삭제(덮어쓰기)", value=False, key="job_wipe_before")
+
+        up_job = st.file_uploader("📤 직업 엑셀 업로드(xlsx)", type=["xlsx"], key="job_bulk_upl")
+        st.session_state.setdefault("job_bulk_df", None)
+        st.session_state.setdefault("job_bulk_sig", None)
+
+        # -------------------------
+        # 1) 업로드 → 미리보기만 저장
+        # -------------------------
+        if up_job is not None:
+            try:
+                file_bytes = up_job.getvalue()
+            except Exception:
+                file_bytes = None
+
+            sig = None
+            if file_bytes is not None:
+                sig = (getattr(up_job, "name", ""), len(file_bytes))
+
+            # ✅ 같은 파일을 이미 파싱해서 미리보기로 들고 있으면 재파싱하지 않음
+            if sig is not None and st.session_state.get("job_bulk_sig") == sig and st.session_state.get("job_bulk_df") is not None:
+                st.info("업로드한 엑셀 미리보기가 준비되어 있습니다. 아래에서 저장(반영)하세요.")
+            else:
+                try:
+                    df = pd.read_excel(up_job)
+                    df = df.copy()
+                    df.columns = [str(c).strip() for c in df.columns]
+
+                    need_cols = {"순", "직업", "월급", "학생 수"}
+                    if not need_cols.issubset(set(df.columns)):
+                        st.error("엑셀 컬럼은 반드시: 순 | 직업 | 월급 | 학생 수 여야 합니다.")
+                        st.session_state["job_bulk_df"] = None
+                        st.session_state["job_bulk_sig"] = None
+                    else:
+                        # 정리/검증
+                        df["순"] = pd.to_numeric(df["순"], errors="coerce").fillna(999999).astype(int)
+                        df["직업"] = df["직업"].astype(str).str.strip()
+                        df["월급"] = pd.to_numeric(df["월급"], errors="coerce").fillna(0).astype(int)
+                        df["학생 수"] = pd.to_numeric(df["학생 수"], errors="coerce").fillna(0).astype(int)
+
+                        bad_job = df[df["직업"].str.len() == 0]
+                        bad_sal = df[df["월급"] <= 0]
+                        bad_cnt = df[df["학생 수"] <= 0]
+
+                        if (not bad_job.empty) or (not bad_sal.empty) or (not bad_cnt.empty):
+                            if not bad_job.empty:
+                                st.error("❌ 직업명이 비어있는 행이 있습니다.")
+                            if not bad_sal.empty:
+                                st.error("❌ 월급은 1 이상이어야 합니다.")
+                            if not bad_cnt.empty:
+                                st.error("❌ 학생 수는 1 이상이어야 합니다.")
+                            st.session_state["job_bulk_df"] = None
+                            st.session_state["job_bulk_sig"] = None
+                        else:
+                            # 보기 좋게 순 정렬
+                            df = df.sort_values(["순", "직업"]).reset_index(drop=True)
+
+                            st.session_state["job_bulk_df"] = df
+                            st.session_state["job_bulk_sig"] = sig
+                            st.success(f"미리보기 준비 완료! ({len(df)}행) 아래에서 저장(반영)을 누르세요.")
+
+                except Exception as e:
+                    st.error(f"직업 엑셀 읽기 실패: {e}")
+                    st.session_state["job_bulk_df"] = None
+                    st.session_state["job_bulk_sig"] = None
+
+        # -------------------------
+        # 2) 미리보기 표시
+        # -------------------------
+        df_preview = st.session_state.get("job_bulk_df")
+        if df_preview is not None and not df_preview.empty:
+            st.dataframe(df_preview, use_container_width=True, hide_index=True)
+
+        # -------------------------
+        # 3) 저장(반영) 버튼: 여기서만 DB 반영
+        # -------------------------
+        if st.button("✅ 저장(반영)", use_container_width=True, key="job_bulk_save_btn"):
+            df2 = st.session_state.get("job_bulk_df")
+            if df2 is None or df2.empty:
+                st.error("먼저 올바른 엑셀을 업로드해서 미리보기를 만든 뒤 저장하세요.")
+            else:
+                try:
+                    if wipe_before:
+                        docs = db.collection("job_salary").stream()
+                        for d in docs:
+                            db.collection("job_salary").document(d.id).delete()
+
+                    for _, r in df2.iterrows():
+                        db.collection("job_salary").document().set(
+                            {
+                                "order": int(r["순"]),
+                                "job": str(r["직업"]),
+                                "salary": int(r["월급"]),
+                                "student_cnt": int(r["학생 수"]),
+                                "assigned_ids": [],
+                                "created_at": firestore.SERVER_TIMESTAMP,
+                            }
+                        )
+
+                    # ✅ 반영 후 세션/업로더 정리 (무한 rerun 방지 + 다음 업로드 준비)
+                    st.session_state["job_bulk_df"] = None
+                    st.session_state["job_bulk_sig"] = None
+                    st.session_state.pop("job_bulk_upl", None)
+
+                    toast("직업 엑셀 저장(반영) 완료!", icon="📥")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"직업 엑셀 저장 실패: {e}")
+
+        st.divider()
 
 # =========================
 # 🏛️ 국세청(국고) 탭
@@ -5951,7 +8953,7 @@ if "🏛️ 국세청(국고)" in tabs:
         st.subheader("🏛️ 국세청(국고)")
 
         # 관리자만 쓰기 가능 / 학생은 읽기만(원하면 later: treasury_read 권한으로 확장)
-        writable = bool(is_admin)
+        writable = bool(is_admin or has_tab_access(my_perms, "🏛️ 국세청(국고)", is_admin))
 
         # 1) 상단 잔액 표시: [국고] : 00000드림
         st_res = api_get_treasury_state_cached()
@@ -6110,8 +9112,8 @@ if "📊 통계청" in tabs:
     with tab_map["📊 통계청"]:
         st.subheader("📊 통계청(제출물 관리)")
 
-        if not is_admin:
-            st.error("관리자 전용 탭입니다.")
+        if not (is_admin or has_tab_access(my_perms, "📊 통계청", is_admin)):
+            st.error("접근 권한이 없습니다.")
             st.stop()
 
         # -------------------------
@@ -6524,6 +9526,25 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
             border-color: #3b82f6 !important;
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4) !important;
         }
+
+/* ===== (PATCH) 통계표 헤더를 라디오와 같은 기준(왼쪽 정렬)으로 맞추기 ===== */
+.stat_hdr_cell{
+  display:flex !important;
+  justify-content:flex-start !important;  /* ✅ 라디오 그룹이 시작하는 쪽(왼쪽)으로 */
+  align-items:center !important;
+  width:100% !important;
+  padding:0 !important;
+  margin:0 !important;
+}
+.stat_hdr_inner{
+  display:inline-block !important;
+  text-align:left !important;
+  font-weight:700 !important;
+  line-height:1.15 !important;
+  /* ✅ 라디오 위젯이 가지고 있는 기본 왼쪽 여백과 유사하게 미세 보정 */
+  padding-left:2px !important;
+}
+
 </style>
 """,
                 unsafe_allow_html=True,
@@ -6539,9 +9560,7 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
                     date_disp = str(s.get("date_display", "") or "")
                     label = str(s.get("label", "") or "")
                     st.markdown(
-                        f"<div style='text-align:center; font-weight:700; line-height:1.15;'>"
-                        f"{date_disp}<br>{label}"
-                        f"</div>",
+                        f"<div class='stat_hdr_cell'><div class='stat_hdr_inner'>{date_disp}<br>{label}</div></div>",
                         unsafe_allow_html=True,
                     )
 
@@ -6669,8 +9688,8 @@ if "💳 신용등급" in tabs:
     with tab_map["💳 신용등급"]:
         st.subheader("💳 신용등급")
 
-        if not is_admin:
-            st.info("관리자 전용 탭입니다.")
+        if not (is_admin or has_tab_access(my_perms, "💳 신용등급", is_admin)):
+            st.info("접근 권한이 없습니다.")
             st.stop()
 
         # -------------------------
@@ -6766,19 +9785,19 @@ if "💳 신용등급" in tabs:
                 return {"base": 50, "o": 1, "x": -3, "tri": 0}
             d = snap.to_dict() or {}
             return {
-                "base": int(d.get("base", 50) or 50),
-                "o": int(d.get("o", 1) or 1),
-                "x": int(d.get("x", -3) or -3),
-                "tri": int(d.get("tri", 0) or 0),
+                "base": int(d.get("base", 50) if d.get("base", None) is not None else 50),
+                "o": int(d.get("o", 1) if d.get("o", None) is not None else 1),
+                "x": int(d.get("x", -3) if d.get("x", None) is not None else -3),
+                "tri": int(d.get("tri", 0) if d.get("tri", None) is not None else 0),
             }
 
         def _save_credit_cfg(cfg: dict):
             db.collection("config").document("credit_scoring").set(
                 {
-                    "base": int(cfg.get("base", 50) or 50),
-                    "o": int(cfg.get("o", 1) or 1),
-                    "x": int(cfg.get("x", -3) or -3),
-                    "tri": int(cfg.get("tri", 0) or 0),
+                    "base": int(cfg.get("base", 50) if cfg.get("base", None) is not None else 50),
+                    "o": int(cfg.get("o", 1) if cfg.get("o", None) is not None else 1),
+                    "x": int(cfg.get("x", -3) if cfg.get("x", None) is not None else -3),
+                    "tri": int(cfg.get("tri", 0) if cfg.get("tri", None) is not None else 0),
                     "updated_at": firestore.SERVER_TIMESTAMP,
                 },
                 merge=True,
@@ -6818,10 +9837,10 @@ if "💳 신용등급" in tabs:
         sub_rows_desc = list(sub_rows_all)            # ✅ 그대로(최신→과거라고 가정)
         sub_rows_asc  = list(reversed(sub_rows_desc)) # ✅ 누적 계산은 과거→최신
 
-        base = int(credit_cfg.get("base", 50) or 50)
-        o_pt = int(credit_cfg.get("o", 1) or 1)
-        x_pt = int(credit_cfg.get("x", -3) or -3)
-        tri_pt = int(credit_cfg.get("tri", 0) or 0)
+        base = int(credit_cfg.get("base", 50) if credit_cfg.get("base", None) is not None else 50)
+        o_pt = int(credit_cfg.get("o", 1) if credit_cfg.get("o", None) is not None else 1)
+        x_pt = int(credit_cfg.get("x", -3) if credit_cfg.get("x", None) is not None else -3)
+        tri_pt = int(credit_cfg.get("tri", 0) if credit_cfg.get("tri", None) is not None else 0)
 
         def _norm_status(v) -> str:
             """상태값을 무조건 'O' / 'X' / '△' 중 하나로 강제"""
@@ -7036,6 +10055,8 @@ if "🏦 은행(적금)" in tabs:
     with tab_map["🏦 은행(적금)"]:
         st.subheader("🏦 은행(적금)")
 
+        bank_admin_ok = bool(is_admin)  # ✅ 학생은 여기서 관리자 UI를 숨기고, 별도 관리자 탭(admin::🏦 은행(적금))에서만 표시
+
         # -------------------------------------------------
         # 공통 유틸
         # -------------------------------------------------
@@ -7179,18 +10200,18 @@ if "🏦 은행(적금)" in tabs:
                 return {"base": 50, "o": 1, "x": -3, "tri": 0}
             d = snap.to_dict() or {}
             return {
-                "base": int(d.get("base", 50) or 50),
-                "o": int(d.get("o", 1) or 1),
-                "x": int(d.get("x", -3) or -3),
-                "tri": int(d.get("tri", 0) or 0),
+                "base": int(d.get("base", 50) if d.get("base", None) is not None else 50),
+                "o": int(d.get("o", 1) if d.get("o", None) is not None else 1),
+                "x": int(d.get("x", -3) if d.get("x", None) is not None else -3),
+                "tri": int(d.get("tri", 0) if d.get("tri", None) is not None else 0),
             }
 
         def _calc_credit_score_for_student(student_id: str) -> tuple[int, int]:
             cfg = _get_credit_cfg()
-            base = int(cfg.get("base", 50) or 50)
-            o_pt = int(cfg.get("o", 1) or 1)
-            x_pt = int(cfg.get("x", -3) or -3)
-            tri_pt = int(cfg.get("tri", 0) or 0)
+            base = int(cfg.get("base", 50) if cfg.get("base", None) is not None else 50)
+            o_pt = int(cfg.get("o", 1) if cfg.get("o", None) is not None else 1)
+            x_pt = int(cfg.get("x", -3) if cfg.get("x", None) is not None else -3)
+            tri_pt = int(cfg.get("tri", 0) if cfg.get("tri", None) is not None else 0)
 
             def _delta(v):
                 vv = _norm_status(v)
@@ -7379,13 +10400,13 @@ if "🏦 은행(적금)" in tabs:
         # -------------------------------------------------
         # (관리자) 자동 만기 처리(열 때마다 한 번)
         # -------------------------------------------------
-        if is_admin:
+        if bank_admin_ok:
             _ensure_maturity_processing_once()
 
         # -------------------------------------------------
         # (A) 관리자: 적금 관리 장부 (엑셀형 표 느낌) + 최신순
         # -------------------------------------------------
-        if is_admin:
+        if bank_admin_ok:
             st.markdown("### 📒 적금 관리 장부")
 
             st.markdown(
@@ -7504,8 +10525,8 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
                 sc, gr = _calc_credit_score_for_student(my_student_id)
                 st.info(f"신용등급: {gr}등급  (점수 {sc}점)")
 
-            st.markdown(f"#### 현재 잔액: **{balance}드림**")
-            st.markdown(f"#### 적금 총액: **{total_savings_principal}드림**")
+            st.markdown(f"#### 💰 통장 잔액: **{balance}드림**")
+            st.markdown(f"#### 🐷 적금 총액: **{total_savings_principal}드림**")
 
             st.markdown("### 📝 적금 가입")
             st.caption("• 적금 가입 시 통장에서 해당 금액이 출금됩니다. • 만기면 원금+이자가 자동 지급됩니다. • 중도해지는 원금만 지급됩니다.")
@@ -7562,7 +10583,7 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
 
             st.divider()
 
-            st.markdown("### 📒 내 적금")
+            st.markdown("### 📒 내 적금 내역")
             my_rows = []
             if my_student_id:
                 q = db.collection(SAV_COL).where(filter=FieldFilter("student_id", "==", str(my_student_id))).stream()
@@ -7625,13 +10646,13 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
 
                 running_ids = df_my[(df_my["_status"] == "running") & (df_my["처리 결과"] == "진행중")].copy()
                 if not running_ids.empty and can_write:
-                    st.markdown("#### 🧯 중도해지(원금만 지급)")
+                    st.markdown("#### ⚠️ 중도 해지(원금만 지급)")
                     opts = ["(선택 없음)"] + [
                         f"{r['적금기간']} | {r['적금 날짜']} | {int(r['적금 금액'])}P"
                         for _, r in running_ids.head(30).iterrows()
                     ]
                     lab_to_id = {opts[i+1]: running_ids.iloc[i]["_id"] for i in range(len(running_ids.head(30)))}
-                    pick2 = st.selectbox("중도해지할 적금 선택", opts, key="stu_bank_cancel_pick")
+                    pick2 = st.selectbox("중도 해지할 적금 선택", opts, key="stu_bank_cancel_pick")
                     if pick2 != "(선택 없음)":
                         if st.button("중도해지 실행", use_container_width=True, key="stu_bank_cancel_do"):
                             rid = str(lab_to_id.get(pick2))
@@ -7709,7 +10730,7 @@ def can_edit_schedule(area: str, perms: set) -> bool:
 # -------------------------
 if "🎯 목표" in tabs and (not is_admin):
     with tab_map["🎯 목표"]:
-        st.subheader("🎯 목표 저금")
+        st.subheader("🎯 나의 목표 자산")
 
         # 1) 현재 목표 불러오기
         gres = api_get_goal(login_name, login_pin)
@@ -7785,7 +10806,15 @@ if "🎯 목표" in tabs and (not is_admin):
             pass
 
         goal_amount = int(g_amt)
-        expected_amount = bal_now + principal_all_running + interest_before_goal
+        # ✅ 투자 현재 평가금(거래 탭 기준) 포함
+        inv_eval_total = 0
+        try:
+            _inv_text, _inv_total = _get_invest_summary_by_student_id(sid)
+            inv_eval_total = int(_inv_total or 0)
+        except Exception:
+            inv_eval_total = 0
+
+        expected_amount = bal_now + principal_all_running + interest_before_goal + inv_eval_total
 
         now_ratio = clamp01(bal_now / goal_amount if goal_amount > 0 else 0)
         exp_ratio = clamp01(expected_amount / goal_amount if goal_amount > 0 else 0)
@@ -7801,7 +10830,11 @@ if "🎯 목표" in tabs and (not is_admin):
             else:
                 msg += " (목표일 이전 만기 적금은 원금만 반영)"
 
+            # ✅ 투자 현재평가 포함 추가
+            if inv_eval_total > 0:
+                msg += f", 투자 현재평가 +{inv_eval_total} 포함"
+
             st.info(msg)
 
         if principal_all_running == 0 and interest_before_goal == 0:
-            st.caption("진행 중 적금이 없어 예상 금액은 현재 잔액과 같아요.")
+            st.caption("진행 중 적금이 없어 예상 금액은 통장 잔액과 같아요.")
