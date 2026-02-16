@@ -654,10 +654,15 @@ def format_kr_datetime(val) -> str:
             dt = dt.astimezone(KST) if dt.tzinfo else dt.replace(tzinfo=KST)
         except Exception:
             return s
+
+    # ✅ 요일(한글 한 글자) 추가: 월~일
+    dow = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
+
     ampm = "오전" if dt.hour < 12 else "오후"
     hour12 = dt.hour % 12
     hour12 = 12 if hour12 == 0 else hour12
-    return f"{dt.year}년 {dt.month:02d}월 {dt.day:02d}일 {ampm} {hour12:02d}시 {dt.minute:02d}분"
+    return f"{dt.year}년 {dt.month:02d}월 {dt.day:02d}일({dow}) {ampm} {hour12:02d}시 {dt.minute:02d}분"
+
 
 def _to_utc_datetime(ts):
     if ts is None or ts == "":
@@ -685,6 +690,13 @@ def clamp01(x: float) -> float:
 def _is_savings_memo(memo: str) -> bool:
     memo = str(memo or "")
     return ("적금 가입" in memo) or ("적금 해지" in memo) or ("적금 만기" in memo)
+
+def _is_invest_memo(memo: str) -> bool:
+    """✅ 투자 내역 판별(되돌리기 대상에서 제외 용도)
+    - 통장 내역에 '투자 매입(...), 투자 회수(...)'가 들어오므로 memo 기반으로 차단
+    """
+    memo = str(memo or "").strip()
+    return memo.startswith("투자 ") or ("투자 매입" in memo) or ("투자 회수" in memo)
 
 def render_asset_summary(balance_now: int, savings_list: list[dict]):
     sv_total = sum(
@@ -913,11 +925,172 @@ def _get_invest_principal_by_student_id(student_id: str) -> tuple[str, int]:
     except Exception:
         return ("없음", 0)
 
+
+
+# =========================
+# ✅ Credit helpers (사용자 헤더에서도 신용도 계산 가능하도록: 정의 위치를 앞쪽으로 배치)
+# =========================
+def _score_to_grade(score: int) -> int:
+    s = int(score or 0)
+    if s >= 90:
+        return 1
+    if s >= 80:
+        return 2
+    if s >= 70:
+        return 3
+    if s >= 60:
+        return 4
+    if s >= 50:
+        return 5
+    if s >= 40:
+        return 6
+    if s >= 30:
+        return 7
+    if s >= 20:
+        return 8
+    if s >= 10:
+        return 9
+    return 10
+
+def _get_credit_cfg():
+    ref = db.collection("config").document("credit_scoring")
+    snap = ref.get()
+    if not snap.exists:
+        return {"base": 50, "o": 1, "x": -3, "tri": 0}
+    d = snap.to_dict() or {}
+    return {
+        "base": int(d.get("base", 50) if d.get("base", None) is not None else 50),
+        "o": int(d.get("o", 1) if d.get("o", None) is not None else 1),
+        "x": int(d.get("x", -3) if d.get("x", None) is not None else -3),
+        "tri": int(d.get("tri", 0) if d.get("tri", None) is not None else 0),
+    }
+
+def _norm_status(v) -> str:
+    v = str(v or "").strip().upper()
+    if v in ("O", "○"):
+        return "O"
+    if v in ("△", "▲", "Δ"):
+        return "△"
+    return "X"
+
+def _calc_credit_score_for_student(student_id: str):
+    credit_cfg = _get_credit_cfg()
+    base = int(credit_cfg.get("base", 50) if credit_cfg.get("base", None) is not None else 50)
+    o_pt = int(credit_cfg.get("o", 1) if credit_cfg.get("o", None) is not None else 1)
+    x_pt = int(credit_cfg.get("x", -3) if credit_cfg.get("x", None) is not None else -3)
+    tri_pt = int(credit_cfg.get("tri", 0) if credit_cfg.get("tri", None) is not None else 0)
+
+    def _delta(v) -> int:
+        v = _norm_status(v)
+        if v == "O":
+            return o_pt
+        if v == "△":
+            return tri_pt
+        return x_pt
+
+    res = api_list_stat_submissions_cached(limit_cols=200)
+    rows_desc = list(res.get("rows", []) or []) if res.get("ok") else []
+
+    score = int(base)
+    # rows_desc는 최신→과거 / 누적은 과거→최신으로
+    for sub in reversed(rows_desc):
+        statuses = dict(sub.get("statuses", {}) or {})
+        v_raw = statuses.get(str(student_id), "X")
+        score = int(score + _delta(v_raw))
+        if score > 100:
+            score = 100
+        if score < 0:
+            score = 0
+
+    grade = _score_to_grade(score)
+    return score, grade
+
+
+def _render_user_bank_header(student_id: str):
+    """✅ 사용자 모드: 탭 위에 통장/사용자 정보 요약 표시"""
+    try:
+        sid = str(student_id or "")
+        if not sid:
+            return
+
+        # 통장잔액
+        bal_now = 0
+        try:
+            snap = db.collection("students").document(sid).get()
+            if snap.exists:
+                bal_now = int((snap.to_dict() or {}).get("balance", 0) or 0)
+        except Exception:
+            bal_now = 0
+
+        # 적금 총 원금(전체)
+        sv_total = 0
+        try:
+            sdocs = (
+                db.collection("savings")
+                .where(filter=FieldFilter("student_id", "==", sid))
+                .stream()
+            )
+            for d in sdocs:
+                s = d.to_dict() or {}
+                sv_total += int(s.get("principal", 0) or 0)
+        except Exception:
+            sv_total = 0
+
+        # 투자: 원금 / 현재평가
+        inv_principal_text, inv_principal_total = _get_invest_principal_by_student_id(sid)
+        inv_eval_text, inv_eval_total = _get_invest_summary_by_student_id(sid)
+
+
+        # 직업 / 신용도
+        role_name = _get_role_name_by_student_id(sid)
+        credit_score, credit_grade = _safe_credit(sid)
+
+        # 총 자산(투자는 현재평가 기준)
+        asset_total = int(bal_now) + int(sv_total) + int(inv_eval_total)
+
+        # 표시 형식(캡쳐 스타일)
+        who = str(st.session_state.get("login_name", "") or "").strip()
+        
+        st.markdown(f"### 🧮 총 자산: {int(asset_total)} 드림")
+
+        # ✅ (PATCH) 총자산 줄은 유지 + 나머지는 글자/간격만 컴팩트하게
+        st.markdown(
+            """
+            <style>
+              .bank-info-line{
+                font-size: 22px;
+                line-height: 1.20;
+                margin: 0.20rem 0 0.20rem 0;
+              }
+              /* st.markdown 기본 p 마진도 줄이기 */
+              .bank-info-wrap p { margin: 0.20rem 0 !important; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            f"""<div class='bank-info-wrap'>
+            <div class='bank-info-line'>💰 통장 잔액: {int(bal_now)} 드림</div>
+            <div class='bank-info-line'>🏦 적금 총액: {int(sv_total)} 드림</div>
+            <div class='bank-info-line'>🪙 투자 원금: 총 {int(inv_principal_total)} 드림({inv_principal_text})</div>
+            <div class='bank-info-line'>📈 현재 평가: 총 {int(inv_eval_total)} 드림({inv_eval_text})</div>
+            <div class='bank-info-line'>💼 직업: {role_name if role_name else '없음'}</div>
+            <div class='bank-info-line'>💳 신용도: {int(credit_grade)}등급({int(credit_score)}점)</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        st.divider()
+    except Exception:
+        # 헤더는 실패해도 앱 전체가 죽지 않게 조용히 패스
+        pass
+
 def _safe_credit(student_id: str):
     """
     ✅ (score, grade) 안전 조회
-    - _calc_credit_score_for_student()가 있으면 그걸 우선 사용
-    - 없거나 에러면 (0, 0)
+    - 가능하면 _calc_credit_score_for_student()로 즉시 계산(사용자 헤더에서도 동작)
+    - 그래도 안되면 students 문서에 저장된 credit_score/credit_grade 사용
+    - 실패 시 (0, 0)
     """
     try:
         if not student_id:
@@ -925,16 +1098,31 @@ def _safe_credit(student_id: str):
 
         f = globals().get("_calc_credit_score_for_student")
         if callable(f):
-            sc, gr = f(str(student_id))
-            return (int(sc or 0), int(gr or 0))
+            out = f(str(student_id))
+            # out이 (score, grade) 튜플인 경우
+            if isinstance(out, (tuple, list)) and len(out) >= 2:
+                return (int(out[0] or 0), int(out[1] or 0))
+            # out이 score(int)만 오는 경우
+            try:
+                sc = int(out or 0)
+                return (sc, int(globals().get("_score_to_grade")(sc) if callable(globals().get("_score_to_grade")) else 0))
+            except Exception:
+                pass
 
-        # (혹시 계산 함수가 없을 때) students 문서에 저장된 값이 있으면 사용
+        # students 문서에 저장된 값 사용
         snap = db.collection("students").document(str(student_id)).get()
         if not snap.exists:
             return (0, 0)
         data = snap.to_dict() or {}
         sc = int(data.get("credit_score", 0) or 0)
         gr = int(data.get("credit_grade", 0) or 0)
+
+        # grade가 비어있는데 score는 있으면 grade 계산
+        if (gr == 0) and (sc != 0):
+            gfn = globals().get("_score_to_grade")
+            if callable(gfn):
+                gr = int(gfn(sc))
+
         return (sc, gr)
 
     except Exception:
@@ -984,7 +1172,7 @@ def api_get_goal_by_student_id(student_id: str):
         return {"ok": False, "error": str(e)}
 
 
-def api_set_goal(student_id: str, target_amount: int, goal_date_str: str):
+def api_set_goal_by_student_id(student_id: str, target_amount: int, goal_date_str: str):
     """학생별 목표 저장(학생 1명당 문서 1개: doc_id = student_id)"""
     GOAL_COL = "goals"
     try:
@@ -1012,34 +1200,18 @@ def api_get_goal(name: str, pin: str):
 
 
 def api_set_goal(name: str, pin: str, goal_amount: int, goal_date_str: str):
-    """사용자 인증 후 목표 저장(업데이트)"""
+    """사용자 인증 후 목표 저장(학생 1명당 문서 1개: doc_id = student_id)"""
     goal_amount = int(goal_amount or 0)
     goal_date_str = str(goal_date_str or "").strip()
 
-    student_doc = fs_auth_student(login_name, login_pin)
+    student_doc = fs_auth_student(name, pin)
     if not student_doc:
         return {"ok": False, "error": "이름 또는 비밀번호가 틀립니다."}
     if goal_amount <= 0:
         return {"ok": False, "error": "목표 금액은 1 이상이어야 합니다."}
 
-    try:
-        q = (
-            db.collection(GOAL_COL)
-            .where(filter=FieldFilter("student_id", "==", student_doc.id))
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .limit(1)
-            .stream()
-        )
-        docs = list(q)
-        payload = {"student_id": student_doc.id, "target_amount": int(goal_amount), "goal_date": goal_date_str}
-        if docs:
-            db.collection(GOAL_COL).document(docs[0].id).set(payload, merge=True)
-        else:
-            payload["created_at"] = firestore.SERVER_TIMESTAMP
-            db.collection(GOAL_COL).document().set(payload)
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    # ✅ 목표 저장은 student_id 문서에 1개로 고정(로그아웃/재로그인 후에도 그대로 불러옴)
+    return api_set_goal_by_student_id(student_doc.id, int(goal_amount), goal_date_str)
 # =========================
 # Firestore helpers (students/auth) - 너 코드 유지
 # =========================
@@ -1618,6 +1790,9 @@ def api_add_tx(name, pin, memo, deposit, withdraw):
                 "amount": amount,
                 "balance_after": new_bal,
                 "memo": memo,
+                "apply_treasury": bool(apply_treasury),
+                "treasury_signed": int(tre_signed),
+                "treasury_memo": str(treasury_memo or memo),
                 "created_at": firestore.SERVER_TIMESTAMP,
             },
         )
@@ -1679,6 +1854,9 @@ def api_admin_add_tx_by_student_id(admin_pin: str, student_id: str, memo: str, d
                 "amount": amount,
                 "balance_after": new_bal,
                 "memo": memo,
+                "apply_treasury": bool(apply_treasury),
+                "treasury_signed": int(tre_signed),
+                "treasury_memo": str(treasury_memo or memo),
                 "created_at": firestore.SERVER_TIMESTAMP,
             },
         )
@@ -1874,6 +2052,9 @@ def api_admin_rollback_selected(admin_pin: str, student_id: str, tx_ids: list[st
         if _is_savings_memo(memo) or ttype in ("maturity",):
             blocked.append((tid, "적금 관련 내역"))
             continue
+        if _is_invest_memo(memo):
+            blocked.append((tid, "투자 내역"))
+            continue
         if _already_rolled_back(student_id, tid):
             blocked.append((tid, "이미 되돌린 거래"))
             continue
@@ -1897,10 +2078,34 @@ def api_admin_rollback_selected(admin_pin: str, student_id: str, tx_ids: list[st
         rollback_amount = -amount
         rollback_ref = db.collection("transactions").document()
 
+        # ✅ 되돌리기 메모를 "내역명(mm.dd.) 되돌리기" 형식으로 표시
+        _orig_memo = str(tx.get("memo", "") or "").strip()
+        _dt_utc = _to_utc_datetime(tx.get("created_at"))
+        if _dt_utc:
+            _dt_kst = _dt_utc.astimezone(KST)
+            _mmdd = f"{_dt_kst.month:02d}.{_dt_kst.day:02d}."
+        else:
+            _mmdd = "--.--."
+        rollback_memo = f"{(_orig_memo or '내역')}({_mmdd}) 되돌리기"
+
+        # ✅ 원거래가 국고(국세청) 반영된 경우: 되돌리기도 국고장부에 반영
+        orig_tre_signed = int(tx.get("treasury_signed", 0) or 0)
+        orig_tre_memo = str(tx.get("treasury_memo", "") or "").strip() or _orig_memo
+
         @firestore.transactional
         def _do_one(transaction):
             st_snap = student_ref.get(transaction=transaction)
             bal = int((st_snap.to_dict() or {}).get("balance", 0))
+
+            # ✅ 국고 되돌리기(원거래가 국고 반영된 경우에만)
+            if int(orig_tre_signed) != 0:
+                _treasury_apply_in_transaction(
+                    transaction,
+                    memo=str(rollback_memo),
+                    signed_amount=int(-orig_tre_signed),
+                    actor="rollback",
+                )
+
             new_bal = bal + rollback_amount
             transaction.update(student_ref, {"balance": new_bal})
             transaction.set(
@@ -1910,7 +2115,10 @@ def api_admin_rollback_selected(admin_pin: str, student_id: str, tx_ids: list[st
                     "type": "rollback",
                     "amount": rollback_amount,
                     "balance_after": new_bal,
-                    "memo": f"{tid} 되돌리기",
+                    "memo": rollback_memo,
+                    "apply_treasury": (int(orig_tre_signed) != 0),
+                    "treasury_signed": int(-orig_tre_signed),
+                    "treasury_memo": str(rollback_memo),
                     "related_tx": tid,
                     "created_at": firestore.SERVER_TIMESTAMP,
                 },
@@ -3415,6 +3623,19 @@ else:
     st.subheader("🔐 로그인")
 
 if not st.session_state.logged_in:
+    # ✅ 이름 저장(체크 시 URL에 저장되어 다음에도 자동 입력)
+    _saved_name = ""
+    _remember_default = False
+    try:
+        _saved_name = str(st.query_params.get("saved_name", "") or "")
+        _remember_default = bool(str(st.query_params.get("remember", "") or "") == "1" and _saved_name)
+    except Exception:
+        _saved_name = ""
+        _remember_default = False
+
+    if _saved_name and not str(st.session_state.get("login_name_input", "") or "").strip():
+        st.session_state["login_name_input"] = _saved_name
+
     with st.form("login_form", clear_on_submit=False):
         login_c1, login_c2, login_c3 = st.columns([2, 2, 1])
         with login_c1:
@@ -3435,6 +3656,16 @@ if not st.session_state.logged_in:
                 st.session_state.logged_in = True
                 st.session_state.login_name = ADMIN_NAME
                 st.session_state.login_pin = ADMIN_PIN
+                # ✅ 이름 저장 처리
+                try:
+                    if bool(st.session_state.get("remember_name_check", False)):
+                        st.query_params["saved_name"] = login_name
+                        st.query_params["remember"] = "1"
+                    else:
+                        st.query_params.pop("saved_name", None)
+                        st.query_params.pop("remember", None)
+                except Exception:
+                    pass
                 toast("관리자 모드 ON", icon="🔓")
                 st.rerun()
             else:
@@ -3446,6 +3677,16 @@ if not st.session_state.logged_in:
                     st.session_state.logged_in = True
                     st.session_state.login_name = login_name
                     st.session_state.login_pin = login_pin
+                # ✅ 이름 저장 처리
+                try:
+                    if bool(st.session_state.get("remember_name_check", False)):
+                        st.query_params["saved_name"] = login_name
+                        st.query_params["remember"] = "1"
+                    else:
+                        st.query_params.pop("saved_name", None)
+                        st.query_params.pop("remember", None)
+                except Exception:
+                    pass
                     toast("로그인 완료!", icon="✅")
                     st.rerun()
 
@@ -3555,7 +3796,7 @@ else:
     # -------------------------
     # ✅ 학생 기본 탭(거래/적금/투자/목표)
     # -------------------------
-    base_labels = ["📝 거래", "🏦 적금"]
+    base_labels = ["📝 거래", "🏦 적금", "📊 통계/신용"]
     if inv_ok:
         base_labels.append("📈 투자")
     base_labels.append("🎯 목표")
@@ -3590,6 +3831,10 @@ else:
 
     user_tab_labels = base_labels + [lab for (lab, _k) in extra_admin_tabs]
 
+    # ✅ (PATCH) 사용자 모드: 탭 위에 통장/정보 요약 표시
+
+    _render_user_bank_header(my_student_id)
+
     tab_objs = st.tabs(user_tab_labels)
 
     # -------------------------------------------------
@@ -3600,20 +3845,22 @@ else:
     # 기본 탭(내부키는 기존 로직 재사용)
     tab_map["🏦 내 통장"] = tab_objs[0]
     tab_map["🏦 은행(적금)"] = tab_objs[1]
+    tab_map["📊 통계/신용"] = tab_objs[2]
 
     if inv_ok:
-        tab_map["📈 투자"] = tab_objs[2]
+        tab_map["📈 투자"] = tab_objs[3]
+        tab_map["🎯 목표"] = tab_objs[4]
+        extra_start = 5
+    else:
         tab_map["🎯 목표"] = tab_objs[3]
         extra_start = 4
-    else:
-        tab_map["🎯 목표"] = tab_objs[2]
-        extra_start = 3
 
     # 추가 관리자 탭 매핑
     for i, (_lab, key_internal) in enumerate(extra_admin_tabs):
         tab_map[key_internal] = tab_objs[extra_start + i]
 
-    tabs = list(tab_map.keys())
+
+tabs = list(tab_map.keys())
 
 # =========================
 # (PATCH) 공용: 신용점수/등급 계산 (내 통장 상단 요약에서 먼저 필요)
@@ -3861,7 +4108,11 @@ if "🏦 내 통장" in tabs:
                             def _can_rollback_row(row):
                                 if str(row.get("type", "")) == "rollback":
                                     return False
-                                if _is_savings_memo(row.get("memo", "")) or str(row.get("type", "")) in ("maturity",):
+                                memo = str(row.get("memo", "") or "")
+                                if _is_savings_memo(memo) or str(row.get("type", "")) in ("maturity",):
+                                    return False
+                                # ✅ 투자 내역은 되돌리기 비활성화
+                                if _is_invest_memo(memo):
                                     return False
                                 return True
 
@@ -4534,94 +4785,6 @@ if "🏦 내 통장" in tabs:
                 st.error("학생 ID를 불러오지 못했어요. (로그인/잔액 조회 확인 필요)")
                 st.stop()
 
-            # ===== 통장 요약 정보 (실데이터 기준) =====
-
-            # 1) 적금 총 원금: running + matured 전부 합(원하신 “총 적금 원금 합계”)
-            total_savings_principal = 0
-            try:
-                sdocs = (
-                    db.collection("savings")  # ✅ SAV_COL 변수 스코프 문제 방지: 문자열로 고정
-                    .where(filter=FieldFilter("student_id", "==", str(student_id)))
-                    .stream()
-                )
-                for d in sdocs:
-                    s = d.to_dict() or {}
-                    total_savings_principal += int(s.get("principal", 0) or 0)
-            except Exception:
-                total_savings_principal = 0
-
-            # 2) 직업: 관리자 '직업/월급 목록'에서 배정한 값(job_salary.assigned_ids)으로 표시
-            job_name = "없음"
-            try:
-                sid = str(student_id)
-
-                # (1) 혹시 students에 저장된 값이 있으면 우선 사용(호환)
-                stu_doc = db.collection("students").document(sid).get()
-                stu = stu_doc.to_dict() if stu_doc.exists else {}
-                job_name = str(stu.get("job_name") or stu.get("job") or stu.get("role_id") or "").strip()
-
-                # (2) 없으면 job_salary 컬렉션에서 assigned_ids에 sid가 들어있는 직업들을 모두 모아서 표시
-                if not job_name:
-                    jobs = []
-                    for jdoc in db.collection("job_salary").stream():
-                        jd = jdoc.to_dict() or {}
-                        assigned = [str(x) for x in (jd.get("assigned_ids", []) or [])]
-                        if sid in assigned:
-                            jname = str(jd.get("job") or "").strip()
-                            if jname:
-                                jobs.append(jname)
-
-                    # 중복 제거(순서 유지) + ", "로 연결
-                    if jobs:
-                        uniq = []
-                        seen = set()
-                        for j in jobs:
-                            if j not in seen:
-                                uniq.append(j)
-                                seen.add(j)
-                        job_name = ", ".join(uniq)
-
-                if not job_name:
-                    job_name = "없음"
-            except Exception:
-                job_name = "없음"
-
-            # 3) 신용도: 공용 계산 함수 사용 (내 통장에서 0으로 뜨는 문제 방지)
-            credit_score, credit_grade = 0, 10
-            try:
-                credit_score, credit_grade = _calc_credit_score_for_student(str(student_id))
-            except Exception:
-                credit_score, credit_grade = 0, 10
-
-            # 4) 투자 현재가치(종목별) + 합계
-            #    - 총자산과 '투자 금액' 표기는 원금이 아니라 '현재 주가 기준'으로 반영
-            invest_text, invest_value_total = "없음", 0
-            try:
-                invest_text, invest_value_total = _get_invest_summary_by_student_id(str(student_id))
-            except Exception:
-                invest_text, invest_value_total = "없음", 0
-
-            asset_total = int(balance + total_savings_principal + invest_value_total)
-
-            st.markdown(f"## 🧾 {login_name} 통장")
-
-            # ✅ 총자산만 따로 출력 (글자 살짝 크게)
-            st.markdown(
-                f'<div class="total-asset">🧮 총 자산: {asset_total}드림</div>',
-                unsafe_allow_html=True
-            )
-
-            # 기존 요약 정보 (총자산 제외)
-            st.markdown(
-                f"""
-**💰 통장 잔액:** {balance}드림  
-**🏦 적금 금액:** {total_savings_principal}드림  
-**📈 투자(현재 평가금액):** {invest_text}  
-**💼 직업:** {job_name}  
-**💳 신용도:** {credit_grade}등급({credit_score}점)
-"""
-            )
-
             # ✅ 거래 기록 (DuplicateElementKey 방지: prefix를 탭 전용으로 변경)
             st.subheader("📝 통장 기록하기")
             memo_u, dep_u, wd_u = render_admin_trade_ui(
@@ -4874,7 +5037,11 @@ if "admin::🏦 내 통장" in tabs:
                             def _can_rollback_row(row):
                                 if str(row.get("type", "")) == "rollback":
                                     return False
-                                if _is_savings_memo(row.get("memo", "")) or str(row.get("type", "")) in ("maturity",):
+                                memo = str(row.get("memo", "") or "")
+                                if _is_savings_memo(memo) or str(row.get("type", "")) in ("maturity",):
+                                    return False
+                                # ✅ 투자 내역은 되돌리기 비활성화
+                                if _is_invest_memo(memo):
                                     return False
                                 return True
 
@@ -5846,12 +6013,6 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
             eval_total = 0
             principal_by_name = {}
             eval_by_name = {}
-
-        st.markdown(f"**💰 통장 잔액:** {cur_bal}드림")
-        st.markdown(f"**🪙 투자 원금:** 총 {principal_total}드림({_fmt_breakdown(principal_by_name)})")
-        st.markdown(f"**📈 현재 평가:** 총 {eval_total}드림({_fmt_breakdown(eval_by_name)})")
-        st.divider()
-
     
     products = _get_products(active_only=True)
     if not products:
@@ -6478,82 +6639,118 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     # -------------------------------------------------
     pending = [x for x in view_rows if not any([x.get("지급완료") == "✅"])]
     if pending:
+
         st.markdown("#### 💸 투자 회수(지급)")
-        can_redeem_now = _can_redeem(my_student_id)
-        if (not is_admin) and (not can_redeem_now):
-            st.info("투자 회수는 관리자 또는 '투자증권' 직업 학생만 할 수 있어요.")
+
+        # ✅ 사용자 모드에서는 "내 것만" 목록으로 보여주되, 지급 버튼은 표시하지 않음
+        #   (지급은 관리자 또는 '투자증권' 직업 학생만 가능 — 문구는 그대로 유지)
+        if (not is_admin) and (not inv_admin_ok):
+            mine = [x for x in pending if str(x.get("_student_id", "") or "") == str(my_student_id or "")]
+            st.info("투자 회수는 관리자 또는 관련 권한을 가진 학생만 할 수 있어요.")
+            if not mine:
+                st.caption("지급 대기 중인 투자 회수 내역이 없습니다.")
+            else:
+                for x in mine[:100]:
+                    pid = str(x.get("_product_id", "") or "")
+                    buy_price = _as_price1(x.get("_buy_price", 0.0))
+                    invest_amt = int(x.get("_invest_amount", 0) or 0)
+                    prod_name = str(x.get("종목", "") or "")
+
+                    # 현재 주가 찾기
+                    cur_price = buy_price
+                    for p in products:
+                        if str(p["product_id"]) == pid:
+                            cur_price = _as_price1(p["current_price"])
+                            break
+
+                    diff, profit, redeem_amt = _calc_redeem_amount(invest_amt, buy_price, cur_price)
+
+                    c1, c2, c3, c4 = st.columns([1.2, 2.2, 2.8, 1.2], gap="small")
+                    with c1:
+                        st.markdown(f"**{x.get('번호','')}**")
+                    with c2:
+                        st.markdown(f"{x.get('이름','')}")
+                        st.caption(prod_name)
+                    with c3:
+                        st.caption(f"매입 {buy_price:.1f} → 현재 {cur_price:.1f} (차이 {diff:.1f})")
+                        st.caption(f"수익/손실 {profit:.1f} | 찾을 금액 {redeem_amt}")
+                    with c4:
+                        st.markdown("<div style='text-align:center; opacity:0.65; padding-top:8px;'>지급대기</div>", unsafe_allow_html=True)
+
+        # ✅ 관리자/투자증권(권한) 모드: 기존 지급 버튼 로직 유지
         else:
-            for x in pending[:100]:
-                doc_id = str(x.get("_doc_id", "") or "")
-                sid = str(x.get("_student_id", "") or "")
-                pid = str(x.get("_product_id", "") or "")
-                buy_price = _as_price1(x.get("_buy_price", 0.0))
-                invest_amt = int(x.get("_invest_amount", 0) or 0)
-                prod_name = str(x.get("종목", "") or "")
-    
-                # 현재 주가 찾기
-                cur_price = buy_price
-                for p in products:
-                    if str(p["product_id"]) == pid:
-                        cur_price = _as_price1(p["current_price"])
-                        break
-    
-                diff, profit, redeem_amt = _calc_redeem_amount(invest_amt, buy_price, cur_price)
-    
-                c1, c2, c3, c4 = st.columns([1.2, 2.2, 2.8, 1.2], gap="small")
-                with c1:
-                    st.markdown(f"**{x.get('번호','')}**")
-                with c2:
-                    st.markdown(f"{x.get('이름','')}")
-                    st.caption(prod_name)
-                with c3:
-                    st.caption(f"매입 {buy_price:.1f} → 현재 {cur_price:.1f} (차이 {diff:.1f})")
-                    st.caption(f"수익/손실 {profit:.1f} | 찾을 금액 {redeem_amt}")
-                with c4:
-                    if st.button("지급", use_container_width=True, key=f"inv_pay_{doc_id}"):
-    
-                        sell_dt = datetime.now(tz=KST)
-                        sell_label = _fmt_kor_date_md(sell_dt)
-                        memo = f"투자 회수({prod_name})"
-    
-                        if inv_admin_ok:
-                            res = api_admin_add_tx_by_student_id(
-                                admin_pin=ADMIN_PIN,
-                                student_id=sid,
-                                memo=memo,
-                                deposit=int(redeem_amt),
-                                withdraw=0,
-                            )
-                        else:
-                            res = api_broker_deposit_by_student_id(
-                                actor_student_id=my_student_id,
-                                student_id=sid,
-                                memo=memo,
-                                deposit=int(redeem_amt),
-                            )
-    
-                        if res.get("ok"):
-                            try:
-                                db.collection(INV_LEDGER_COL).document(doc_id).set(
-                                    {
-                                        "redeemed": True,
-                                        "sell_at": firestore.SERVER_TIMESTAMP,
-                                        "sell_date_label": sell_label,
-                                        "sell_price": _as_price1(cur_price),
-                                        "diff": _as_price1(diff),
-                                        "profit": float(profit),
-                                        "redeem_amount": int(redeem_amt),
-                                    },
-                                    merge=True,
+            can_redeem_now = _can_redeem(my_student_id)
+            if (not is_admin) and (not can_redeem_now):
+                st.info("투자 회수는 관리자 또는 '투자증권' 직업 학생만 할 수 있어요.")
+            else:
+                for x in pending[:100]:
+                    doc_id = str(x.get("_doc_id", "") or "")
+                    sid = str(x.get("_student_id", "") or "")
+                    pid = str(x.get("_product_id", "") or "")
+                    buy_price = _as_price1(x.get("_buy_price", 0.0))
+                    invest_amt = int(x.get("_invest_amount", 0) or 0)
+                    prod_name = str(x.get("종목", "") or "")
+
+                    # 현재 주가 찾기
+                    cur_price = buy_price
+                    for p in products:
+                        if str(p["product_id"]) == pid:
+                            cur_price = _as_price1(p["current_price"])
+                            break
+
+                    diff, profit, redeem_amt = _calc_redeem_amount(invest_amt, buy_price, cur_price)
+
+                    c1, c2, c3, c4 = st.columns([1.2, 2.2, 2.8, 1.2], gap="small")
+                    with c1:
+                        st.markdown(f"**{x.get('번호','')}**")
+                    with c2:
+                        st.markdown(f"{x.get('이름','')}")
+                        st.caption(prod_name)
+                    with c3:
+                        st.caption(f"매입 {buy_price:.1f} → 현재 {cur_price:.1f} (차이 {diff:.1f})")
+                        st.caption(f"수익/손실 {profit:.1f} | 찾을 금액 {redeem_amt}")
+                    with c4:
+                        if st.button("지급", use_container_width=True, key=f"inv_pay_{doc_id}"):
+
+                            sell_dt = datetime.now(tz=KST)
+                            sell_label = _fmt_kor_date_md(sell_dt)
+                            memo = f"투자 회수({prod_name})"
+
+                            if inv_admin_ok:
+                                res = api_admin_add_tx_by_student_id(
+                                    admin_pin=ADMIN_PIN,
+                                    student_id=sid,
+                                    memo=memo,
+                                    deposit=int(redeem_amt),
+                                    withdraw=0,
                                 )
+                            else:
+                                res = api_broker_deposit_by_student_id(
+                                    actor_student_id=my_student_id,
+                                    student_id=sid,
+                                    memo=memo,
+                                    deposit=int(redeem_amt),
+                                    withdraw=0,
+                                )
+
+                            if res.get("ok"):
+                                # 지급완료 처리 + 지급일 기록
+                                try:
+                                    db.collection(INV_LEDGER_COL).document(doc_id).update(
+                                        {
+                                            "redeemed": True,
+                                            "redeemed_at": firestore.SERVER_TIMESTAMP,
+                                            "redeemed_label": sell_label,
+                                            "redeemed_amount": int(redeem_amt),
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+
                                 toast("지급 완료!", icon="✅")
                                 st.rerun()
-                            except Exception as e:
-                                st.error(f"장부 업데이트 실패: {e}")
-                        else:
-                            st.error(res.get("error", "지급 실패"))
-    
-    st.divider()
+                            else:
+                                st.error(res.get("error", "지급 실패"))
     
     # -------------------------------------------------
     # 3) (사용자) 투자 실행
@@ -6581,7 +6778,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
             sel_prod = by_label.get(sel_lab)
     
             amt = st.number_input("투자 금액", min_value=0, step=10, value=0, key="inv_user_amt")
-            if st.button("투자(다음 확인창에서 ‘예’를 눌러야 완료, 신중하게 결정하기)", use_container_width=True, key="inv_user_btn"):
+            if st.button("투자하기 (다음 확인창에서 ‘예’를 눌러야 완료, 신중하게 결정하기)", use_container_width=True, key="inv_user_btn"):
                 if int(amt) <= 0:
                     st.warning("투자 금액을 입력해 주세요.")
                 else:
@@ -9239,40 +9436,36 @@ if "📊 통계청" in tabs:
                     out.append(x)
             return out
 
-        # ✅ 한 줄: [◀ + 페이지 + /전체페이지 + ▶] | [저장/초기화/삭제]
-        row = st.columns([7.6, 2.4], gap="small")
+        # ✅ 한 줄: [◀] [페이지] [/전체페이지] [▶] | [저장/초기화/삭제]
+        row = st.columns([4, 3], gap="small")
 
         with row[0]:
-            items = _page_items(cur_page, total_pages)
+            nav = st.columns([1, 1, 1, 1], gap="small")
 
-            # 폭을 더 촘촘히: 마지막에 ▶가 "/전체페이지" 바로 옆에 붙게
-            widths = [0.9] + [0.6] * len(items) + [1.1] + [0.9]
-            nav_cols = st.columns(widths, gap="small")
-
-            # ◀ : 최신(1페이지)면 비활성
-            with nav_cols[0]:
+            with nav[0]:
                 if st.button("◀", key="stat_nav_left", use_container_width=True, disabled=(cur_page <= 1)):
                     _goto_page(cur_page - 1)
 
-            # 페이지 버튼
-            for i, it in enumerate(items):
-                with nav_cols[i + 1]:
-                    if it == "…":
-                        st.markdown("<div style='text-align:center; opacity:0.55;'>…</div>", unsafe_allow_html=True)
-                    else:
-                        p = int(it)
-                        if st.button(f"{p}", key=f"stat_nav_p_{p}", use_container_width=True, disabled=(p == cur_page)):
-                            _goto_page(p)
+            with nav[1]:
+                page_val = st.number_input(
+                    "",
+                    min_value=1,
+                    max_value=total_pages,
+                    value=cur_page,
+                    step=1,
+                    key="stat_page_num",
+                    label_visibility="collapsed",
+                )
+                if int(page_val) != int(cur_page):
+                    _goto_page(int(page_val))
 
-            # "/전체페이지 N" : 텍스트만
-            with nav_cols[len(items) + 1]:
+            with nav[2]:
                 st.markdown(
-                    f"<div style='text-align:left; font-weight:700; padding-top:6px;'>/ 전체페이지 {total_pages}</div>",
+                    f"<div style='text-align:center; font-weight:700; padding-top:6px;'>/ 전체페이지 {total_pages}</div>",
                     unsafe_allow_html=True,
                 )
 
-            # ▶ : 마지막 페이지면 비활성
-            with nav_cols[len(items) + 2]:
+            with nav[3]:
                 if st.button("▶", key="stat_nav_right", use_container_width=True, disabled=(cur_page >= total_pages)):
                     _goto_page(cur_page + 1)
 
@@ -9925,59 +10118,44 @@ if "💳 신용등급" in tabs:
         # -------------------------
         # 네비게이션 UI
         # -------------------------
-        nav_row = st.columns([7.6, 2.4], gap="small")
+        nav = st.columns([1, 1, 1, 1], gap="small")
 
-        with nav_row[0]:
-            items = _page_items(cur_page, total_pages)
-            widths = [0.9] + [0.6] * len(items) + [1.1] + [0.9]
-            nav_cols = st.columns(widths, gap="small")
+        with nav[0]:
+            if st.button(
+                "◀",
+                key="credit_nav_left",
+                use_container_width=True,
+                disabled=(cur_page <= 1),
+            ):
+                _credit_goto_page(cur_page - 1)
 
-            # ◀
-            with nav_cols[0]:
-                if st.button(
-                    "◀",
-                    key="credit_nav_left",
-                    use_container_width=True,
-                    disabled=(cur_page <= 1),
-                ):
-                    _credit_goto_page(cur_page - 1)
+        with nav[1]:
+            page_val = st.number_input(
+                "",
+                min_value=1,
+                max_value=total_pages,
+                value=cur_page,
+                step=1,
+                key="credit_page_num",
+                label_visibility="collapsed",
+            )
+            if int(page_val) != int(cur_page):
+                _credit_goto_page(int(page_val))
 
-            # 페이지 숫자
-            for i, it in enumerate(items):
-                with nav_cols[i + 1]:
-                    if it == "…":
-                        st.markdown(
-                            "<div style='text-align:center; opacity:0.55;'>…</div>",
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        p = int(it)
-                        if st.button(
-                            f"{p}",
-                            key=f"credit_nav_p_{p}",
-                            use_container_width=True,
-                            disabled=(p == cur_page),
-                        ):
-                            _credit_goto_page(p)
+        with nav[2]:
+            st.markdown(
+                f"<div style='text-align:center; font-weight:700; padding-top:6px;'>/ 전체페이지 {total_pages}</div>",
+                unsafe_allow_html=True,
+            )
 
-            # / 전체페이지 N (텍스트)
-            with nav_cols[len(items) + 1]:
-                st.markdown(
-                    f"<div style='text-align:left; font-weight:700; padding-top:6px;'>"
-                    f"/ 전체페이지 {total_pages}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-            # ▶
-            with nav_cols[len(items) + 2]:
-                if st.button(
-                    "▶",
-                    key="credit_nav_right",
-                    use_container_width=True,
-                    disabled=(cur_page >= total_pages),
-                ):
-                    _credit_goto_page(cur_page + 1)
+        with nav[3]:
+            if st.button(
+                "▶",
+                key="credit_nav_right",
+                use_container_width=True,
+                disabled=(cur_page >= total_pages),
+            ):
+                _credit_goto_page(cur_page + 1)
 
         # -------------------------
         # ✅ page_idx 기준으로 날짜 컬럼 슬라이스
@@ -9987,7 +10165,7 @@ if "💳 신용등급" in tabs:
         sub_rows_view = sub_rows_desc[start:end]
 
         # ---- 헤더(날짜 + 제출물 내역 2줄) ----
-        hdr_cols = st.columns([0.55, 1.2] + [1.9] * len(sub_rows_view))
+        hdr_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
         with hdr_cols[0]:
             st.markdown("**번호**")
         with hdr_cols[1]:
@@ -10016,7 +10194,7 @@ if "💳 신용등급" in tabs:
             no = int(stx["no"])
             nm = stx["name"]
 
-            row_cols = st.columns([0.55, 1.2] + [1.9] * len(sub_rows_view))
+            row_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
             with row_cols[0]:
                 st.markdown(str(no))
             with row_cols[1]:
@@ -10046,7 +10224,6 @@ if "💳 신용등급" in tabs:
 # =========================
 if "🏦 은행(적금)" in tabs:
     with tab_map["🏦 은행(적금)"]:
-        st.subheader("🏦 은행(적금)")
 
         bank_admin_ok = bool(is_admin)  # ✅ 학생은 여기서 관리자 UI를 숨기고, 별도 관리자 탭(admin::🏦 은행(적금))에서만 표시
 
@@ -10514,12 +10691,18 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
             balance = int(slot.get("balance", 0) or 0)
             my_student_id = slot.get("student_id")
 
+            # ✅ (FIX) 적금 총액(진행중) 계산: NameError 방지
+            total_savings_principal = 0
+            try:
+                if my_student_id:
+                    sres = api_savings_list_by_student_id(str(my_student_id))
+                    if sres.get("ok"):
+                        total_savings_principal = savings_active_total(sres.get("savings", []))
+            except Exception:
+                total_savings_principal = 0
+
             if my_student_id:
                 sc, gr = _calc_credit_score_for_student(my_student_id)
-                st.info(f"신용등급: {gr}등급  (점수 {sc}점)")
-
-            st.markdown(f"#### 💰 통장 잔액: **{balance}드림**")
-            st.markdown(f"#### 🐷 적금 총액: **{total_savings_principal}드림**")
 
             st.markdown("### 📝 적금 가입")
             st.caption("• 적금 가입 시 통장에서 해당 금액이 출금됩니다. • 만기면 원금+이자가 자동 지급됩니다. • 중도해지는 원금만 지급됩니다.")
@@ -10681,6 +10864,262 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
             df_rate = pd.DataFrame(table_rows)
             st.dataframe(df_rate, use_container_width=True, hide_index=True)
 
+
+# =========================
+# 📊 통계/신용 (학생 전용 · 읽기 전용)
+# - 통계청 통계표(본인) + 신용등급 변동표(본인)
+# - 저장/초기화/삭제/수정 기능 없음
+# =========================
+if "📊 통계/신용" in tabs and (not is_admin):
+    with tab_map["📊 통계/신용"]:
+
+        if not my_student_id:
+            st.info("로그인 후 확인할 수 있어요.")
+            st.stop()
+
+        # 내 번호/이름
+        my_no = ""
+        my_nm = ""
+        try:
+            ss = db.collection("students").document(str(my_student_id)).get()
+            if ss.exists:
+                d0 = ss.to_dict() or {}
+                my_no = str(d0.get("no", "") or "")
+                my_nm = str(d0.get("name", "") or "").strip()
+        except Exception:
+            pass
+
+        # -------------------------------------------------
+        # 1) 통계표(내 기록)
+        # -------------------------------------------------
+        st.markdown("### 📋 통계표(내 기록)")
+
+        sub_res_u = api_list_stat_submissions_cached(limit_cols=50)
+        sub_rows_all_u = sub_res_u.get("rows", []) if sub_res_u.get("ok") else []
+        if not sub_rows_all_u:
+            st.info("아직 제출물 내역이 없어요.")
+        else:
+            import math
+
+            VISIBLE_COLS = 7
+            total_cols = len(sub_rows_all_u)
+            total_pages = max(1, int(math.ceil(total_cols / VISIBLE_COLS)))
+
+            if "user_stat_page_idx" not in st.session_state:
+                st.session_state["user_stat_page_idx"] = 0  # 0=최신
+
+            st.session_state["user_stat_page_idx"] = max(
+                0, min(int(st.session_state["user_stat_page_idx"]), total_pages - 1)
+            )
+            page_idx = int(st.session_state["user_stat_page_idx"])
+            cur_page = page_idx + 1
+
+            def _goto_user_stat_page(p: int):
+                p = max(1, min(int(p), total_pages))
+                st.session_state["user_stat_page_idx"] = p - 1
+                st.rerun()
+
+            # 네비게이션(저장/초기화/삭제 없음) — ✅ 1줄 고정(사용자 모드 전용)
+            nav = st.columns([1, 1, 1, 1], gap="small")
+            with nav[0]:
+                if st.button("◀", key="user_stat_prev", use_container_width=True, disabled=(cur_page <= 1)):
+                    _goto_user_stat_page(cur_page - 1)
+            with nav[1]:
+                # ✅ 페이지 번호 입력(1줄)
+                page_val = st.number_input(
+                    "",
+                    min_value=1,
+                    max_value=total_pages,
+                    value=cur_page,
+                    step=1,
+                    key="user_stat_page_num",
+                    label_visibility="collapsed",
+                )
+                if int(page_val) != int(cur_page):
+                    _goto_user_stat_page(int(page_val))
+            with nav[2]:
+                st.markdown(
+                    f"""<div style="text-align:center; padding-top:0.45rem;">/ 전체페이지 {total_pages}</div>""",
+                    unsafe_allow_html=True,
+                )
+            with nav[3]:
+                if st.button("▶", key="user_stat_next", use_container_width=True, disabled=(cur_page >= total_pages)):
+                    _goto_user_stat_page(cur_page + 1)
+
+            # 최신이 왼쪽이 되도록(내부는 DESC 기준 유지)
+            sub_rows_desc = list(sub_rows_all_u)  # created_at DESC
+            start = page_idx * VISIBLE_COLS
+            end = start + VISIBLE_COLS
+            sub_rows_view = sub_rows_desc[start:end]
+
+            # ---- 헤더 ----
+            hdr_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
+            with hdr_cols[0]:
+                st.markdown("**번호**")
+            with hdr_cols[1]:
+                st.markdown("**이름**")
+
+            for j, s in enumerate(sub_rows_view):
+                with hdr_cols[j + 2]:
+                    date_disp = str(s.get("date_display", "") or "").strip()
+                    if not date_disp:
+                        date_disp = _fmt_kor_date_short(s.get("created_at_utc", ""))
+                    lab = str(s.get("label", "") or "").strip()
+                    st.markdown(
+                        f"<div class='stat_hdr_cell'><div class='stat_hdr_inner'>{date_disp}<br>{lab}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            # ---- 본문(내 것 1줄) ----
+            row_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
+            with row_cols[0]:
+                st.markdown(my_no if my_no else "-")
+            with row_cols[1]:
+                st.markdown(my_nm if my_nm else "-")
+
+            for j, sub in enumerate(sub_rows_view):
+                statuses = dict(sub.get("statuses", {}) or {})
+                stv = _norm_status(statuses.get(str(my_student_id), "X"))
+                opt = ["O", "X", "△"]
+                idx0 = 0 if stv == "O" else (1 if stv == "X" else 2)
+                with row_cols[j + 2]:
+                    st.radio(
+                        "상태",
+                        opt,
+                        index=idx0,
+                        key=f"user_stat_cell_{str(my_student_id)}_{str(sub.get('submission_id') or '')}",
+                        horizontal=True,
+                        label_visibility="collapsed",
+                        disabled=True,
+                    )
+
+        st.divider()
+
+        # -------------------------------------------------
+        # 2) 신용등급 변동표(내 기록)
+        # -------------------------------------------------
+        st.markdown("### 💳 신용등급 변동표(내 기록)")
+
+        sub_res_c = api_list_stat_submissions_cached(limit_cols=50)
+        sub_rows_all_c = sub_res_c.get("rows", []) if sub_res_c.get("ok") else []
+        if not sub_rows_all_c:
+            st.info("표시할 기록이 없어요.")
+        else:
+            import math
+
+            cfg = _get_credit_cfg()
+            base = int(cfg.get("base", 50) or 50)
+
+            def _delta(v: str) -> int:
+                v = _norm_status(v)
+                if v == "O":
+                    return int(cfg.get("o", 1) or 1)
+                if v == "△":
+                    return int(cfg.get("tri", 0) or 0)
+                return int(cfg.get("x", -3) or -3)
+
+            # 누적 점수(오래된→최신 순으로 계산)
+            sub_rows_desc = list(sub_rows_all_c)
+            sub_rows_asc = list(reversed(sub_rows_desc))
+
+            cur = base
+            score_at_sub = {}
+            for s in sub_rows_asc:
+                sid = str(s.get("submission_id") or "")
+                statuses = dict(s.get("statuses", {}) or {})
+                v = statuses.get(str(my_student_id), "X")
+                cur = int(cur) + int(_delta(v))
+                score_at_sub[sid] = int(cur)
+
+            VISIBLE_COLS2 = 7
+            total_cols2 = len(sub_rows_desc)
+            total_pages2 = max(1, int(math.ceil(total_cols2 / VISIBLE_COLS2)))
+
+            if "user_credit_page_idx" not in st.session_state:
+                st.session_state["user_credit_page_idx"] = 0
+
+            st.session_state["user_credit_page_idx"] = max(
+                0, min(int(st.session_state["user_credit_page_idx"]), total_pages2 - 1)
+            )
+            page_idx2 = int(st.session_state["user_credit_page_idx"])
+            cur_page2 = page_idx2 + 1
+
+            def _goto_user_credit_page(p: int):
+                p = max(1, min(int(p), total_pages2))
+                st.session_state["user_credit_page_idx"] = p - 1
+                st.rerun()
+
+            # 네비게이션 — ✅ 1줄 고정(사용자 모드 전용)
+            nav2 = st.columns([1, 1, 1, 1], gap="small")
+            with nav2[0]:
+                if st.button("◀", key="user_credit_prev", use_container_width=True, disabled=(cur_page2 <= 1)):
+                    _goto_user_credit_page(cur_page2 - 1)
+            with nav2[1]:
+                page_val2 = st.number_input(
+                    "",
+                    min_value=1,
+                    max_value=total_pages2,
+                    value=cur_page2,
+                    step=1,
+                    key="user_credit_page_num",
+                    label_visibility="collapsed",
+                )
+                if int(page_val2) != int(cur_page2):
+                    _goto_user_credit_page(int(page_val2))
+            with nav2[2]:
+                st.markdown(
+                    f"""<div style="text-align:center; padding-top:0.45rem;">/ 전체페이지 {total_pages2}</div>""",
+                    unsafe_allow_html=True,
+                )
+            with nav2[3]:
+                if st.button("▶", key="user_credit_next", use_container_width=True, disabled=(cur_page2 >= total_pages2)):
+                    _goto_user_credit_page(cur_page2 + 1)
+
+            start2 = page_idx2 * VISIBLE_COLS2
+            end2 = start2 + VISIBLE_COLS2
+            sub_rows_view2 = sub_rows_desc[start2:end2]
+
+            hdr_cols2 = st.columns([0.55, 1.2] + [1.9] * len(sub_rows_view2))
+            with hdr_cols2[0]:
+                st.markdown("**번호**")
+            with hdr_cols2[1]:
+                st.markdown("**이름**")
+
+            for j, s in enumerate(sub_rows_view2):
+                with hdr_cols2[j + 2]:
+                    date_disp = str(s.get("date_display", "") or "").strip()
+                    if not date_disp:
+                        date_disp = _fmt_kor_date_short(s.get("created_at_utc", ""))
+                    lab = str(s.get("label", "") or "").strip()
+                    st.markdown(
+                        f"<div style='text-align:center; font-weight:900; line-height:1.15;'>"
+                        f"{date_disp}<br>{lab}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            row_cols2 = st.columns([0.55, 1.2] + [1.9] * len(sub_rows_view2))
+            with row_cols2[0]:
+                st.markdown(my_no if my_no else "-")
+            with row_cols2[1]:
+                st.markdown(my_nm if my_nm else "-")
+
+            for j, sub in enumerate(sub_rows_view2):
+                sid = str(sub.get("submission_id") or "")
+                sc = int(score_at_sub.get(sid, base))
+                gr = _score_to_grade(sc)
+                with row_cols2[j + 2]:
+                    st.markdown(
+                        f"<div style='text-align:center; font-weight:900;'>{sc}점/{gr}등급</div>",
+                        unsafe_allow_html=True,
+                    )
+
+        st.divider()
+
 # =========================
 # 10) 🗓️ 일정 (권한별 수정)
 # =========================
@@ -10722,7 +11161,8 @@ def can_edit_schedule(area: str, perms: set) -> bool:
 # -------------------------
 if "🎯 목표" in tabs and (not is_admin):
     with tab_map["🎯 목표"]:
-        st.subheader("🎯 나의 목표 자산")
+        # ✅ 타이틀(DDay) 자리
+        title_ph = st.empty()
 
         # 1) 현재 목표 불러오기
         gres = api_get_goal(login_name, login_pin)
@@ -10747,10 +11187,23 @@ if "🎯 목표" in tabs and (not is_admin):
             default_date = date.today() + timedelta(days=30)
             if cur_goal_date:
                 try:
-                    default_date = datetime.fromisoformat(cur_goal_date).date().date()
+                    default_date = datetime.fromisoformat(cur_goal_date).date()
                 except Exception:
                     pass
             g_date = st.date_input("목표 날짜", value=default_date, key=f"goal_date_{login_name}")
+            # ✅ D-Day 표시 (목표 날짜 기준 남은 일수)
+            try:
+                _dday = int((g_date - date.today()).days)
+            except Exception:
+                _dday = 0
+            if _dday >= 0:
+                dday_text = f"(D-{_dday:02d}일)"
+            else:
+                dday_text = f"(D+{abs(_dday):02d}일)"
+            title_ph.markdown(
+                f"## 🎯 나의 목표 자산 <span style='font-size:0.75em;color:#777;'>{dday_text}</span>",
+                unsafe_allow_html=True,
+            )
 
         if st.button("목표 저장", key=f"goal_save_{login_name}", use_container_width=True):
             res = api_set_goal(login_name, login_pin, int(g_amt), g_date.isoformat())
