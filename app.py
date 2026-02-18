@@ -4229,8 +4229,8 @@ def api_draw_lottery(admin_pin: str, round_id: str, winning_numbers: list[int]):
     # 세금 계산식(요청사항):
     # (총액-3등총액)*1등백분율*0.01*(세금백분율*0.01)
     # +(총액-3등총액)*2등백분율*0.01*(세금백분율*0.01)
-    first_tax_total = int(round(base_pool * (first_pct / 100.0) * (tax_rate / 100.0), 0))
-    second_tax_total = int(round(base_pool * (second_pct / 100.0) * (tax_rate / 100.0), 0))
+    first_tax_total = int(round(base_pool * (first_pct / 100.0) * (tax_rate / 100.0), 0)) if winners1 else 0
+    second_tax_total = int(round(base_pool * (second_pct / 100.0) * (tax_rate / 100.0), 0)) if winners2 else 0
     tax_total = int(first_tax_total + second_tax_total)
 
     participant_keys = set()
@@ -4324,8 +4324,11 @@ def _calc_lottery_financials(round_row: dict) -> dict:
     third_total = int(third_prize * third_winner_count)
     base_pool = max(int(total_sales - third_total), 0)
 
-    first_tax_total = int(round(base_pool * (first_pct / 100.0) * (tax_rate / 100.0), 0))
-    second_tax_total = int(round(base_pool * (second_pct / 100.0) * (tax_rate / 100.0), 0))
+    first_winner_count = int(sum(1 for w in winners if int(w.get("rank", 0) or 0) == 1))
+    second_winner_count = int(sum(1 for w in winners if int(w.get("rank", 0) or 0) == 2))
+
+    first_tax_total = int(round(base_pool * (first_pct / 100.0) * (tax_rate / 100.0), 0)) if first_winner_count > 0 else 0
+    second_tax_total = int(round(base_pool * (second_pct / 100.0) * (tax_rate / 100.0), 0)) if second_winner_count > 0 else 0
     tax_total = int(first_tax_total + second_tax_total)
     national_amount = int(total_sales - payout_total)
 
