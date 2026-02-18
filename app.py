@@ -12494,30 +12494,37 @@ if "🎟️ 복권" in tabs:
                     html.append("</tbody></table>")
                     st.markdown("".join(html), unsafe_allow_html=True)
 
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        payout_done = bool((r_dat or {}).get("payout_done", False))
-                        if st.button("당첨금 지급", key="lot_pay_btn", use_container_width=True, disabled=payout_done):
-                            res = api_pay_lottery_prizes(ADMIN_PIN, current_round_id)
-                            if res.get("ok"):
-                                toast("당첨금 지급 완료", icon="✅")
-                                st.rerun()
-                            else:
-                                st.error(res.get("error", "당첨금 지급 실패"))
-                        if payout_done:
-                            st.caption("이미 당첨금 지급이 완료되었습니다.")
+                    payout_done = bool((r_dat or {}).get("payout_done", False))
+                    led_done = bool((r_dat or {}).get("ledger_applied", False))
+                    action_done = payout_done and led_done
 
-                    with c2:
-                        led_done = bool((r_dat or {}).get("ledger_applied", False))
-                        if st.button("장부 반영", key="lot_ledger_btn", use_container_width=True, disabled=led_done):
-                            res = api_apply_lottery_ledger(ADMIN_PIN, current_round_id)
-                            if res.get("ok"):
-                                toast("복권 관리 장부 반영 완료", icon="✅")
-                                st.rerun()
-                            else:
-                                st.error(res.get("error", "장부 반영 실패"))
-                        if led_done:
-                            st.caption("이미 장부 반영된 회차입니다.")
+                    if st.button(
+                        "당첨금 지급 및 장부 반영",
+                        key="lot_finalize_btn",
+                        use_container_width=True,
+                        disabled=action_done,
+                    ):
+                        finalize_ok = True
+                        if not payout_done:
+                            pay_res = api_pay_lottery_prizes(ADMIN_PIN, current_round_id)
+                            if not pay_res.get("ok"):
+                                st.error(pay_res.get("error", "당첨금 지급 실패"))
+                                finalize_ok = False
+
+                        if finalize_ok and (not led_done):
+                            led_res = api_apply_lottery_ledger(ADMIN_PIN, current_round_id)
+                            if not led_res.get("ok"):
+                                st.error(led_res.get("error", "장부 반영 실패"))
+                                finalize_ok = False
+
+                        if finalize_ok:
+                            toast("당첨금 지급 및 장부 반영 완료", icon="✅")
+                            st.rerun()
+
+                    if payout_done:
+                        st.caption("당첨금 지급: 완료")
+                    if led_done:
+                        st.caption("장부 반영: 완료")
                 else:
                     st.info("당첨자가 없습니다.")
 
