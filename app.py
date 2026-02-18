@@ -4226,10 +4226,11 @@ def api_draw_lottery(admin_pin: str, round_id: str, winning_numbers: list[int]):
     winner_rows.sort(key=lambda x: (int(x.get("rank", 9) or 9), int(x.get("student_no", 0) or 0)))
 
     payout_total = int(sum(int(x.get("prize", 0) or 0) for x in winner_rows))
-    # 1·2등 세금은 "총 당첨금(세전) - 세후 총액" 기준으로 계산한다.
-    # (개별 지급액 반올림으로 생기는 차액이 세금에 섞이지 않도록 분리)
-    first_tax_total = int(max(first_gross_total - first_net_total, 0)) if winners1 else 0
-    second_tax_total = int(max(second_gross_total - second_net_total, 0)) if winners2 else 0
+    # 세금 계산식(요청사항):
+    # (총액-3등총액)*1등백분율*0.01*(세금백분율*0.01)
+    # +(총액-3등총액)*2등백분율*0.01*(세금백분율*0.01)
+    first_tax_total = int(round(base_pool * (first_pct / 100.0) * (tax_rate / 100.0), 0))
+    second_tax_total = int(round(base_pool * (second_pct / 100.0) * (tax_rate / 100.0), 0))
     tax_total = int(first_tax_total + second_tax_total)
 
     participant_keys = set()
@@ -4327,8 +4328,20 @@ def api_apply_lottery_ledger(admin_pin: str, round_id: str):
     participants = int(r.get("participants", 0) or 0)
     ticket_count = int(r.get("ticket_count", participants) or participants)
     total_sales = int(r.get("total_sales", 0) or 0)
-    payout_total = int(r.get("payout_total", 0) or 0)
-    tax_total = int(r.get("tax_total", 0) or 0)
+    winners = list(r.get("winners", []) or [])
+    payout_total = int(sum(int(w.get("prize", 0) or 0) for w in winners))
+
+    tax_rate = int(r.get("tax_rate", 40) or 40)
+    first_pct = int(r.get("first_pct", 80) or 80)
+    second_pct = int(r.get("second_pct", 20) or 20)
+    third_prize = int(r.get("third_prize", 20) or 20)
+    third_winner_count = int(sum(1 for w in winners if int(w.get("rank", 0) or 0) == 3))
+    third_total = int(third_prize * third_winner_count)
+    base_pool = max(int(total_sales - third_total), 0)
+    tax_total = int(
+        round(base_pool * (first_pct / 100.0) * (tax_rate / 100.0), 0)
+        + round(base_pool * (second_pct / 100.0) * (tax_rate / 100.0), 0)
+    )
     
     # 레거시 회차 보정: 참여자 수는 "복권 수"가 아닌 "실제 참여 학생 수"로 유지
     if participants <= 0:
