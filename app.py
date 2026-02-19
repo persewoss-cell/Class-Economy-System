@@ -10696,7 +10696,7 @@ if "📊 통계청" in tabs:
         # - 최신 제출물이 "왼쪽" (created_at DESC)
         # - 클릭은 로컬 변경, [저장] 시 DB 반영
         # -------------------------
-        st.markdown("### 📋 통계청 통계표")
+        st.markdown("### 📋 통계 관리 장부")
 
         # 최신 제출물 N개(왼쪽부터 최신)
         sub_res = api_list_stat_submissions_cached(limit_cols=50)
@@ -11303,7 +11303,7 @@ if "💳 신용등급" in tabs:
 
         credit_cfg = _get_credit_cfg()
 
-        st.markdown("### 🌟 신용등급표")
+        st.markdown("### 🌟 신용등급 관리 장부")
         
         with st.expander("⚙️ 점수 계산 설정(O/X/△ 점수 변경)", expanded=False):
             c1, c2, c3, c4, c5 = st.columns([1.1, 1, 1, 1, 1.2])
