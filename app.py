@@ -12485,7 +12485,7 @@ if "🍀 복권" in tabs:
                 else:
                     st.info("당첨자가 없습니다.")
 
-            st.markdown("### 복권 관리 장부")
+            st.markdown("### 📒 복권 관리 장부")
             led_res = api_list_lottery_admin_ledger(limit=200)
             led_rows = list(led_res.get("rows", []) or [])
             if led_rows:
