@@ -1091,7 +1091,6 @@ def _render_user_bank_header(student_id: str):
             </div>""",
             unsafe_allow_html=True,
         )
-        st.divider()
     except Exception:
         # 헤더는 실패해도 앱 전체가 죽지 않게 조용히 패스
         pass
