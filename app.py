@@ -8750,7 +8750,6 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
 
 if "🔎 개별조회" in tabs:
     with tab_map["🔎 개별조회"]:
-        st.subheader("🔎 개별조회(번호순)")
 
         if not (is_admin or has_tab_access(my_perms, "🔎 개별조회", is_admin)):
             st.error("접근 권한이 없습니다.")
@@ -8914,7 +8913,6 @@ if "📈 투자" in tabs:
         )
 if "👥 계정 정보/활성화" in tabs:
     with tab_map["👥 계정 정보/활성화"]:
-        st.subheader("📋 계정정보 / 활성화 관리")
 
         if not is_admin:
             st.error("관리자 전용 탭입니다.")
@@ -10459,7 +10457,6 @@ if "💼 직업/월급" in tabs:
 # =========================
 if "🏛️ 국세청(국고)" in tabs:
     with tab_map["🏛️ 국세청(국고)"]:
-        st.subheader("🏛️ 국세청(국고)")
 
         # 관리자만 쓰기 가능 / 학생은 읽기만(원하면 later: treasury_read 권한으로 확장)
         writable = bool(is_admin or has_tab_access(my_perms, "🏛️ 국세청(국고)", is_admin))
@@ -10619,7 +10616,6 @@ if "🏛️ 국세청(국고)" in tabs:
 # =========================
 if "📊 통계청" in tabs:
     with tab_map["📊 통계청"]:
-        st.subheader("📊 통계청(제출물 관리)")
 
         if not (is_admin or has_tab_access(my_perms, "📊 통계청", is_admin)):
             st.error("접근 권한이 없습니다.")
@@ -11191,7 +11187,6 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
 # =========================
 if "💳 신용등급" in tabs:
     with tab_map["💳 신용등급"]:
-        st.subheader("💳 신용등급")
 
         if not (is_admin or has_tab_access(my_perms, "💳 신용등급", is_admin)):
             st.info("접근 권한이 없습니다.")
@@ -12189,7 +12184,6 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
 # =========================
 if "🏷️ 경매" in tabs:
     with tab_map["🏷️ 경매"]:
-        st.subheader("🏷️ 경매")
 
         open_res = api_get_open_auction_round()
         open_round = (open_res.get("round", {}) or {}) if open_res.get("ok") else {}
@@ -12341,7 +12335,6 @@ if "🏷️ 경매" in tabs:
 # =========================
 if "🍀 복권" in tabs:
     with tab_map["🍀 복권"]:
-        st.subheader("🍀 복권")
 
         open_lot_res = api_get_open_lottery_round()
         open_round = (open_lot_res.get("round", {}) or {}) if open_lot_res.get("ok") else {}
