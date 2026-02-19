@@ -12195,7 +12195,7 @@ if "🏷️ 경매" in tabs:
         open_round = (open_res.get("round", {}) or {}) if open_res.get("ok") else {}
 
         if is_admin:
-            st.markdown("### 경매 개시")
+            st.markdown("### 📢 경매 개시")
             c1, c2 = st.columns(2)
             with c1:
                 a_bid_name = st.text_input("입찰 내역", key="auc_admin_bid_name").strip()
@@ -12231,7 +12231,7 @@ if "🏷️ 경매" in tabs:
                 st.info("개시된 경매가 없습니다.")
 
             st.divider()
-            st.markdown("### 경매 결과")
+            st.markdown("### 📊 경매 결과")
 
             closed_res = api_get_latest_closed_auction_round()
             if not closed_res.get("ok"):
@@ -12290,7 +12290,7 @@ if "🏷️ 경매" in tabs:
                 else:
                     st.info("제출된 입찰표가 없습니다.")
 
-            st.markdown("### 경매 관리 장부")
+            st.markdown("### 📚 경매 관리 장부")
             led = api_list_auction_admin_ledger(limit=100)
             led_rows = list(led.get("rows", []) or [])
             if led_rows:
@@ -12308,7 +12308,7 @@ if "🏷️ 경매" in tabs:
                 my_no_v = int((me or {}).get("no", 0) or 0)
                 my_name_v = str((me or {}).get("name", login_name) or login_name)
 
-                st.markdown("### 입찰표")
+                st.markdown("### 📝 입찰표")
                 st.write(f"입찰기일: {_fmt_auction_dt(open_round.get('opened_at'))}")
                 st.write(f"입찰번호: {int(open_round.get('round_no', 0) or 0):02d}")
                 st.write(f"입찰이름: {str(open_round.get('bid_name', '') or '')}")
@@ -12425,9 +12425,9 @@ if "🍀 복권" in tabs:
                     ]
                     st.dataframe(pd.DataFrame(view_rows), use_container_width=True, hide_index=True)
                 else:
-                    st.info("(평상시) 개시된 복권이 없습니다.")
+                    st.info("개시된 복권이 없습니다.")
             else:
-                st.info("(평상시) 개시된 복권이 없습니다.")
+                st.info("개시된 복권이 없습니다.")
 
             st.divider()
             st.markdown("### 🎰 복권 추첨하기")
@@ -12540,7 +12540,7 @@ if "🍀 복권" in tabs:
         else:
             st.markdown("### 🎟️ 복권 구매하기")
             if not open_round:
-                st.info("(평상시) 개시된 복권이 없습니다.")
+                st.info("개시된 복권이 없습니다.")
             else:
                 st.caption(
                     f"{int(open_round.get('round_no', 0) or 0)}회차 | 복권 가격 {int(open_round.get('ticket_price', 0) or 0)}"
