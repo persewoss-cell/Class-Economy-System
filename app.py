@@ -11211,69 +11211,6 @@ if "💳 신용등급" in tabs:
             st.stop()
 
         # -------------------------
-        # 1) 점수/등급 규칙표(1~10등급)
-        # -------------------------
-        st.markdown("### 📌 신용등급 구분표")
-        st.markdown(
-            """
-<style>
-.credit-band { border:1px solid #ddd; border-radius:12px; overflow:hidden; }
-.credit-band table { width:100%; border-collapse:collapse; font-weight:700; }
-.credit-band th, .credit-band td { border-right:1px solid #ddd; padding:10px 6px; text-align:center; }
-.credit-band th:last-child, .credit-band td:last-child { border-right:none; }
-.credit-band th { background:#f3f4f6; }
-</style>
-<div class="credit-band">
-  <table>
-    <tr>
-      <th>1등급</th><th>2등급</th><th>3등급</th><th>4등급</th><th>5등급</th>
-      <th>6등급</th><th>7등급</th><th>8등급</th><th>9등급</th><th>10등급</th>
-    </tr>
-    <tr>
-      <td>90이상</td><td>80-89</td><td>70-79</td><td>60-69</td><td>50-59</td>
-      <td>40-49</td><td>30-39</td><td>20-29</td><td>10-19</td><td>0-9</td>
-    </tr>
-  </table>
-</div>
-""",
-            unsafe_allow_html=True,
-        )
-
-        def _score_to_grade(score: int) -> int:
-            s = int(score)
-            if s >= 90:
-                return 1
-            if s >= 80:
-                return 2
-            if s >= 70:
-                return 3
-            if s >= 60:
-                return 4
-            if s >= 50:
-                return 5
-            if s >= 40:
-                return 6
-            if s >= 30:
-                return 7
-            if s >= 20:
-                return 8
-            if s >= 10:
-                return 9
-            return 10
-
-        def _fmt_kor_date_short(iso_utc: str) -> str:
-            # "0월 0일(요일한글자)" 형태
-            try:
-                # 예: 2026-02-07T00:00:00Z
-                dt = datetime.fromisoformat(str(iso_utc).replace("Z", "+00:00")).astimezone(KST)
-                wd = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
-                return f"{dt.month}월 {dt.day}일({wd})"
-            except Exception:
-                return ""
-
-        st.divider()
-
-        # -------------------------
         # 2) 점수 계산 설정(기본값)
         # -------------------------
         def _get_credit_cfg():
@@ -11527,6 +11464,69 @@ if "💳 신용등급" in tabs:
                         f"<div style='text-align:center; font-weight:900;'>{sc}점/{gr}등급</div>",
                         unsafe_allow_html=True,
                     )
+
+        st.divider()
+
+        # -------------------------
+        # 1) 점수/등급 규칙표(1~10등급)
+        # -------------------------
+        st.markdown("### 📌 신용등급 구분표")
+        st.markdown(
+            """
+<style>
+.credit-band { border:1px solid #ddd; border-radius:12px; overflow:hidden; }
+.credit-band table { width:100%; border-collapse:collapse; font-weight:700; }
+.credit-band th, .credit-band td { border-right:1px solid #ddd; padding:10px 6px; text-align:center; }
+.credit-band th:last-child, .credit-band td:last-child { border-right:none; }
+.credit-band th { background:#f3f4f6; }
+</style>
+<div class="credit-band">
+  <table>
+    <tr>
+      <th>1등급</th><th>2등급</th><th>3등급</th><th>4등급</th><th>5등급</th>
+      <th>6등급</th><th>7등급</th><th>8등급</th><th>9등급</th><th>10등급</th>
+    </tr>
+    <tr>
+      <td>90이상</td><td>80-89</td><td>70-79</td><td>60-69</td><td>50-59</td>
+      <td>40-49</td><td>30-39</td><td>20-29</td><td>10-19</td><td>0-9</td>
+    </tr>
+  </table>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+        def _score_to_grade(score: int) -> int:
+            s = int(score)
+            if s >= 90:
+                return 1
+            if s >= 80:
+                return 2
+            if s >= 70:
+                return 3
+            if s >= 60:
+                return 4
+            if s >= 50:
+                return 5
+            if s >= 40:
+                return 6
+            if s >= 30:
+                return 7
+            if s >= 20:
+                return 8
+            if s >= 10:
+                return 9
+            return 10
+
+        def _fmt_kor_date_short(iso_utc: str) -> str:
+            # "0월 0일(요일한글자)" 형태
+            try:
+                # 예: 2026-02-07T00:00:00Z
+                dt = datetime.fromisoformat(str(iso_utc).replace("Z", "+00:00")).astimezone(KST)
+                wd = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
+                return f"{dt.month}월 {dt.day}일({wd})"
+            except Exception:
+                return ""
 
         st.divider()
 
