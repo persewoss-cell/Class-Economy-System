@@ -12309,10 +12309,10 @@ if "🏷️ 경매" in tabs:
                 my_name_v = str((me or {}).get("name", login_name) or login_name)
 
                 st.markdown("### 📝 입찰표")
-                st.write(f"입찰기일: {_fmt_auction_dt(open_round.get('opened_at'))}")
-                st.write(f"입찰번호: {int(open_round.get('round_no', 0) or 0):02d}")
-                st.write(f"입찰이름: {str(open_round.get('bid_name', '') or '')}")
-                st.write(f"입찰자 정보: 번호 {my_no_v} / 이름 {my_name_v} / 소속 {str(open_round.get('affiliation', '') or '')}")
+                st.write(f"- 입찰기일: {_fmt_auction_dt(open_round.get('opened_at'))}")
+                st.write(f"- 입찰번호: {int(open_round.get('round_no', 0) or 0):02d}")
+                st.write(f"- 입찰이름: {str(open_round.get('bid_name', '') or '')}")
+                st.write(f"- 입찰자 정보: 번호 {my_no_v} / 이름 {my_name_v} / 소속 {str(open_round.get('affiliation', '') or '')}")
 
                 bid_doc_id = f"{str(open_round.get('round_id', '') or '')}_{sid}"
                 prev_bid = db.collection("auction_bids").document(bid_doc_id).get() if sid else None
