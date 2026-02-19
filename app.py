@@ -12347,7 +12347,7 @@ if "🍀 복권" in tabs:
         open_round = (open_lot_res.get("round", {}) or {}) if open_lot_res.get("ok") else {}
 
         if is_admin:
-            st.markdown("### 복권 설정 및 개시")
+            st.markdown("### 🛠️ 복권 설정 및 개시")
             l1, l2, l3 = st.columns(3)
             with l1:
                 lot_price = st.number_input("복권 가격 설정", min_value=2, step=1, value=20, key="lot_admin_price")
@@ -12409,7 +12409,7 @@ if "🍀 복권" in tabs:
                     current_round_id = ""
 
             st.divider()
-            st.markdown("### 복권 참여 결과")
+            st.markdown("### 📝 복권 참여 결과")
             if current_round_id:
                 ent_res = api_list_lottery_entries(current_round_id)
                 ent_rows = list(ent_res.get("rows", []) or [])
@@ -12430,7 +12430,7 @@ if "🍀 복권" in tabs:
                 st.info("(평상시) 개시된 복권이 없습니다.")
 
             st.divider()
-            st.markdown("### 복권 추첨하기")
+            st.markdown("### 🎰 복권 추첨하기")
             d1, d2, d3, d4 = st.columns(4)
             with d1:
                 wn1 = st.number_input("첫 번째 당첨번호", min_value=1, max_value=20, step=1, value=1, key="lot_wn1")
@@ -12458,7 +12458,7 @@ if "🍀 복권" in tabs:
                     else:
                         st.error(res.get("error", "복권 추첨 실패"))
 
-            st.markdown("### 당첨자 확인")
+            st.markdown("### 🎉 당첨자 확인")
             if current_round_id:
                 r_snap = db.collection("lottery_rounds").document(current_round_id).get()
                 r_dat = r_snap.to_dict() if r_snap.exists else {}
@@ -12538,7 +12538,7 @@ if "🍀 복권" in tabs:
                 st.info("아직 반영된 복권 관리 장부가 없습니다.")
 
         else:
-            st.markdown("### 복권 구매하기")
+            st.markdown("### 🎟️ 복권 구매하기")
             if not open_round:
                 st.info("(평상시) 개시된 복권이 없습니다.")
             else:
@@ -12598,7 +12598,7 @@ if "🍀 복권" in tabs:
                             else:
                                 st.error(res.get("error", "복권 구매 실패"))
 
-            st.markdown("### 복권 구매 내역")
+            st.markdown("### 📜 복권 구매 내역")
             my_sid = str(my_student_id or "")
             hist_rows = []
             if my_sid:
