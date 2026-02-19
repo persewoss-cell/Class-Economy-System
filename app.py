@@ -4883,7 +4883,6 @@ with st.sidebar:
                 st.session_state.delete_confirm = False
                 st.rerun()
 
-    st.divider()
 
 # =========================
 # Main: 로그인 (너 코드 방식 유지: form)
@@ -5370,7 +5369,6 @@ if "🏦 내 통장" in tabs:
 
                 # ✅ 되돌리기(관리자)
                 if st.session_state.get("admin_bulk_reward_undo_mode", False):
-                    st.divider()
                     st.subheader("↩️ 선택 되돌리기(관리자)")
 
                     admin_pin_rb = st.text_input(
@@ -5434,7 +5432,6 @@ if "🏦 내 통장" in tabs:
                                     else:
                                         st.error(res2.get("error", "되돌리기 실패"))
 
-                st.divider()
 
                 # -------------------------------------------------
                 # 2) 내역 템플릿 순서 정렬
@@ -5658,7 +5655,6 @@ if "🏦 내 통장" in tabs:
                                         toast("변경 취소(원복)!", icon="↩️")
                                         st.rerun()
 
-                st.divider()
 
                 # -------------------------------------------------
                 # 3) 템플릿 추가/수정/삭제
@@ -5793,7 +5789,6 @@ if "🏦 내 통장" in tabs:
                                 st.session_state["bank_tpl_del_confirm"] = False
                                 st.rerun()
 
-                st.divider()
                 st.markdown("### 📥 템플릿 엑셀로 일괄 추가")
 
                 import io
@@ -5993,7 +5988,6 @@ if "🏦 내 통장" in tabs:
                     if selected_names:
                         st.caption("선택됨: " + " · ".join(selected_names))
 
-                    st.divider()
                     st.markdown("### 🎁 개인 지급/벌금")
 
                     tpl_res_p = api_list_templates_cached()
@@ -6177,7 +6171,6 @@ if "🏦 내 통장" in tabs:
                     st.session_state.undo_mode = not st.session_state.undo_mode
 
             if st.session_state.undo_mode:
-                st.divider()
                 st.subheader("↩️ 선택 되돌리기(관리자 전용)")
                 admin_pin2 = st.text_input("관리자 PIN 입력", type="password", key=f"undo_admin_pin_{login_name}").strip()
 
@@ -6229,7 +6222,6 @@ if "🏦 내 통장" in tabs:
                             else:
                                 st.error(res2.get("error", "되돌리기 실패"))
 
-            st.divider()
             st.subheader("📒 통장 내역(최신순)")
             render_tx_table(df_tx)
 
@@ -6324,7 +6316,6 @@ if "admin::🏦 내 통장" in tabs:
 
                 # ✅ 되돌리기(관리자)
                 if st.session_state.get("admin_bulk_reward_undo_mode", False):
-                    st.divider()
                     st.subheader("↩️ 선택 되돌리기(관리자)")
 
                     admin_pin_rb = st.text_input(
@@ -6388,7 +6379,6 @@ if "admin::🏦 내 통장" in tabs:
                                     else:
                                         st.error(res2.get("error", "되돌리기 실패"))
 
-                st.divider()
 
                 # -------------------------------------------------
                 # 2) 내역 템플릿 순서 정렬
@@ -6612,7 +6602,6 @@ if "admin::🏦 내 통장" in tabs:
                                         toast("변경 취소(원복)!", icon="↩️")
                                         st.rerun()
 
-                st.divider()
 
                 # -------------------------------------------------
                 # 3) 템플릿 추가/수정/삭제
@@ -6747,7 +6736,6 @@ if "admin::🏦 내 통장" in tabs:
                                 st.session_state["bank_tpl_del_confirm"] = False
                                 st.rerun()
 
-                st.divider()
                 st.markdown("### 📥 템플릿 엑셀로 일괄 추가")
 
                 import io
@@ -6947,7 +6935,6 @@ if "admin::🏦 내 통장" in tabs:
                     if selected_names:
                         st.caption("선택됨: " + " · ".join(selected_names))
 
-                    st.divider()
                     st.markdown("### 🎁 개인 지급/벌금")
 
                     tpl_res_p = api_list_templates_cached()
@@ -7909,7 +7896,6 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                     else:
                         st.caption("아직 주가 변동 기록이 없습니다.")
     
-    st.divider()
     
     # -------------------------------------------------
     # 2) 투자 상품 관리 장부
@@ -8146,7 +8132,6 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     # 4) (관리자) 투자 종목 추가/수정/삭제
     # -------------------------------------------------
     if inv_admin_ok:
-        st.divider()
         st.markdown("### 🧰 투자 종목 추가/수정/삭제")
     
         prod_all = _get_products(active_only=False)
@@ -8738,9 +8723,6 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
                             else:
                                 st.error(res.get("error", "중도해지 실패"))
 
-            st.divider()
-
-
         
         # -------------------------------------------------
 
@@ -9241,7 +9223,6 @@ if "👥 계정 정보/활성화" in tabs:
                 except Exception as e:
                     st.error(f"엑셀 처리 실패: {e}")
 
-        st.divider()
 
         # -------------------------------------------------
         # ✅ 학생 리스트 로드 (번호=엑셀 번호, 그 순서대로 정렬)
@@ -9910,7 +9891,6 @@ if "💼 직업/월급" in tabs:
                 except Exception as e:
                     st.error(f"전체 직업 해제 실패: {e}")
 
-        st.divider()
 
         # -------------------------------------------------
         # ✅ (PATCH) 직업 현황(학생 기준 표) — 학생이 직업 여러 개면 여러 행으로 표시
@@ -9957,7 +9937,6 @@ if "💼 직업/월급" in tabs:
         else:
             st.info("아직 직업이 배정된 학생이 없습니다.")
 
-        st.divider()
 
         # -------------------------------------------------
         # ✅ (PATCH) [숨김] 직업/월급 '목록 표' + 순서이동/삭제/정원 +/- UI
@@ -10200,7 +10179,6 @@ if "💼 직업/월급" in tabs:
                         st.markdown("</div>", unsafe_allow_html=True)
                     st.markdown("<div style='margin:0.35rem 0; border-bottom:1px solid #eee;'></div>", unsafe_allow_html=True)
 
-                st.divider()
 
                 # -------------------------------------------------
                 # ✅ 하단: 직업 추가/수정 (하우스포인트 템플릿처럼)
@@ -10448,7 +10426,6 @@ if "💼 직업/월급" in tabs:
                 except Exception as e:
                     st.error(f"직업 엑셀 저장 실패: {e}")
 
-        st.divider()
 
 # =========================
 # 🏛️ 국세청(국고) 탭
@@ -10488,7 +10465,6 @@ if "🏛️ 국세청(국고)" in tabs:
                 hide_index=True,
             )
 
-        st.divider()
 
         # 3) 세입/세출 입력(개별 관리자 입금/출금과 같은 원리)
         st.markdown("### 📝 세입/세출 내역 입력")
@@ -10522,7 +10498,6 @@ if "🏛️ 국세청(국고)" in tabs:
         with btnc2:
             st.caption("※ 세입/세출 중 하나만 입력")
 
-        st.divider()
 
         # 4) 국고 템플릿 추가/수정/삭제 (국고 전용)
         st.markdown("### 🧩 국고 템플릿 추가/수정/삭제")
@@ -10689,7 +10664,6 @@ if "📊 통계청" in tabs:
                     else:
                         st.error(res.get("error", "추가 실패"))
 
-        st.divider()
 
         # -------------------------
         # (중간) 통계청 통계표
@@ -11119,7 +11093,6 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
                 else:
                     st.error(res_sv.get("error", "저장 실패"))
 
-        st.divider()
 
         # -------------------------
         # (하단) 통계표 템플릿 추가/수정/삭제
@@ -11467,7 +11440,6 @@ if "💳 신용등급" in tabs:
                         unsafe_allow_html=True,
                     )
 
-        st.divider()
 
         # -------------------------
         # 1) 점수/등급 규칙표(1~10등급)
@@ -11530,7 +11502,6 @@ if "💳 신용등급" in tabs:
             except Exception:
                 return ""
 
-        st.divider()
 
 # =========================
 # 🏦 은행(적금) 탭
@@ -11985,10 +11956,6 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
                                 st.rerun()
                             else:
                                 st.error(res.get("error", "중도해지 실패"))
-
-            st.divider()
-
-
         
         # -------------------------------------------------
         # (B) 학생: 적금 가입 UI + 내 적금 목록 + 신용등급 미리보기
@@ -12074,7 +12041,6 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
                         else:
                             st.error(res.get("error", "적금 가입 실패"))
 
-            st.divider()
 
             st.markdown("### 📒 내 적금 내역")
             my_rows = []
@@ -12156,7 +12122,6 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
                             else:
                                 st.error(res.get("error", "중도해지 실패"))
 
-            st.divider()
 
         # -------------------------------------------------
         # (C) 이자율 표(캡쳐 표 위치): 장부 아래 / 학생 화면 맨 아래
@@ -12226,7 +12191,6 @@ if "🏷️ 경매" in tabs:
             else:
                 st.info("개시된 경매가 없습니다.")
 
-            st.divider()
             st.markdown("### 📊 경매 결과")
 
             closed_res = api_get_latest_closed_auction_round()
@@ -12403,7 +12367,6 @@ if "🍀 복권" in tabs:
                 except Exception:
                     current_round_id = ""
 
-            st.divider()
             st.markdown("### 📝 복권 참여 결과")
             if current_round_id:
                 ent_res = api_list_lottery_entries(current_round_id)
@@ -12424,7 +12387,6 @@ if "🍀 복권" in tabs:
             else:
                 st.info("개시된 복권이 없습니다.")
 
-            st.divider()
             st.markdown("### 🎰 복권 추첨하기")
             d1, d2, d3, d4 = st.columns(4)
             with d1:
@@ -12523,7 +12485,6 @@ if "🍀 복권" in tabs:
                 else:
                     st.info("당첨자가 없습니다.")
 
-            st.divider()
             st.markdown("### 복권 관리 장부")
             led_res = api_list_lottery_admin_ledger(limit=200)
             led_rows = list(led_res.get("rows", []) or [])
@@ -12774,7 +12735,6 @@ if "📊 통계/신용" in tabs and (not is_admin):
                         disabled=True,
                     )
 
-        st.divider()
 
         # -------------------------------------------------
         # 2) 신용등급 변동표(내 기록)
@@ -12897,7 +12857,6 @@ if "📊 통계/신용" in tabs and (not is_admin):
                         unsafe_allow_html=True,
                     )
 
-        st.divider()
 
 # =========================
 # 10) 🗓️ 일정 (권한별 수정)
