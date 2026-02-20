@@ -12284,9 +12284,12 @@ if "🏷️ 경매" in tabs:
                         f"제출시각 {_fmt_auction_dt(pb.get('submitted_at'))}"
                     )
                 else:
-                    amt = st.number_input("입찰 가격(드림)", min_value=0, step=1, key="auc_user_amount")
-                    confirm = st.radio("입찰표를 제출하시겠습니까?", ["아니오", "예"], horizontal=True, key="auc_user_confirm")
-                    if st.button("입찰표 제출", use_container_width=True, key="auc_user_submit_btn"):
+                    with st.form("auc_user_submit_form"):
+                        amt = st.number_input("입찰 가격(드림)", min_value=0, step=1, key="auc_user_amount")
+                        confirm = st.radio("입찰표를 제출하시겠습니까?", ["아니오", "예"], horizontal=True, key="auc_user_confirm")
+                        submit_bid = st.form_submit_button("입찰표 제출", use_container_width=True)
+
+                    if submit_bid:
                         if confirm != "예":
                             st.warning("제출 전 확인에서 '예'를 선택해 주세요.")
                         else:
@@ -12308,45 +12311,46 @@ if "🍀 복권" in tabs:
 
         if is_admin:
             st.markdown("### 🛠️ 복권 설정 및 개시")
-            l1, l2, l3 = st.columns(3)
-            with l1:
-                lot_price = st.number_input("복권 가격 설정", min_value=2, step=1, value=20, key="lot_admin_price")
-                lot_first = st.number_input("1등 당첨 백분율(%)", min_value=0, max_value=100, step=1, value=80, key="lot_admin_first_pct")
-            with l2:
-                lot_tax = st.number_input("세금(%)", min_value=1, max_value=100, step=1, value=40, key="lot_admin_tax")
-                lot_second = st.number_input("2등 당첨 백분율(%)", min_value=0, max_value=100, step=1, value=20, key="lot_admin_second_pct")
-            with l3:
-                lot_third = st.number_input("3등 당첨금", min_value=0, step=1, value=20, key="lot_admin_third")
+            with st.form("lot_admin_open_form"):
+                l1, l2, l3 = st.columns(3)
+                with l1:
+                    lot_price = st.number_input("복권 가격 설정", min_value=2, step=1, value=20, key="lot_admin_price")
+                    lot_first = st.number_input("1등 당첨 백분율(%)", min_value=0, max_value=100, step=1, value=80, key="lot_admin_first_pct")
+                with l2:
+                    lot_tax = st.number_input("세금(%)", min_value=1, max_value=100, step=1, value=40, key="lot_admin_tax")
+                    lot_second = st.number_input("2등 당첨 백분율(%)", min_value=0, max_value=100, step=1, value=20, key="lot_admin_second_pct")
+                with l3:
+                    lot_third = st.number_input("3등 당첨금", min_value=0, step=1, value=20, key="lot_admin_third")
 
-            if int(lot_first) + int(lot_second) != 100:
-                st.warning("1등 + 2등 당첨 백분율의 합은 반드시 100이어야 합니다.")
+                if int(lot_first) + int(lot_second) != 100:
+                    st.warning("1등 + 2등 당첨 백분율의 합은 반드시 100이어야 합니다.")
 
-            b1, b2 = st.columns(2)
-            with b1:
-                if st.button("개시", key="lot_admin_open_btn", use_container_width=True):
-                    res = api_open_lottery(
-                        ADMIN_PIN,
-                        {
-                            "ticket_price": int(lot_price),
-                            "tax_rate": int(lot_tax),
-                            "first_pct": int(lot_first),
-                            "second_pct": int(lot_second),
-                            "third_prize": int(lot_third),
-                        },
-                    )
-                    if res.get("ok"):
-                        toast(f"복권 {int(res.get('round_no', 0) or 0)}회 개시", icon="✅")
-                        st.rerun()
-                    else:
-                        st.error(res.get("error", "복권 개시 실패"))
-            with b2:
-                if st.button("마감", key="lot_admin_close_btn", use_container_width=True):
-                    res = api_close_lottery(ADMIN_PIN)
-                    if res.get("ok"):
-                        toast("복권 마감 완료", icon="✅")
-                        st.rerun()
-                    else:
-                        st.error(res.get("error", "복권 마감 실패"))
+                open_submit = st.form_submit_button("개시", use_container_width=True)
+
+            if open_submit:
+                res = api_open_lottery(
+                    ADMIN_PIN,
+                    {
+                        "ticket_price": int(lot_price),
+                        "tax_rate": int(lot_tax),
+                        "first_pct": int(lot_first),
+                        "second_pct": int(lot_second),
+                        "third_prize": int(lot_third),
+                    },
+                )
+                if res.get("ok"):
+                    toast(f"복권 {int(res.get('round_no', 0) or 0)}회 개시", icon="✅")
+                    st.rerun()
+                else:
+                    st.error(res.get("error", "복권 개시 실패"))
+
+            if st.button("마감", key="lot_admin_close_btn", use_container_width=True):
+                res = api_close_lottery(ADMIN_PIN)
+                if res.get("ok"):
+                    toast("복권 마감 완료", icon="✅")
+                    st.rerun()
+                else:
+                    st.error(res.get("error", "복권 마감 실패"))
 
             if open_round:
                 st.success(
@@ -12389,21 +12393,24 @@ if "🍀 복권" in tabs:
                 st.info("개시된 복권이 없습니다.")
 
             st.markdown("### 🎰 복권 추첨하기")
-            d1, d2, d3, d4 = st.columns(4)
-            with d1:
-                wn1 = st.number_input("첫 번째 당첨번호", min_value=1, max_value=20, step=1, value=1, key="lot_wn1")
-            with d2:
-                wn2 = st.number_input("두 번째 당첨번호", min_value=1, max_value=20, step=1, value=2, key="lot_wn2")
-            with d3:
-                wn3 = st.number_input("세 번째 당첨번호", min_value=1, max_value=20, step=1, value=3, key="lot_wn3")
-            with d4:
-                wn4 = st.number_input("네 번째 당첨번호", min_value=1, max_value=20, step=1, value=4, key="lot_wn4")
+            with st.form("lot_draw_form"):
+                d1, d2, d3, d4 = st.columns(4)
+                with d1:
+                    wn1 = st.number_input("첫 번째 당첨번호", min_value=1, max_value=20, step=1, value=1, key="lot_wn1")
+                with d2:
+                    wn2 = st.number_input("두 번째 당첨번호", min_value=1, max_value=20, step=1, value=2, key="lot_wn2")
+                with d3:
+                    wn3 = st.number_input("세 번째 당첨번호", min_value=1, max_value=20, step=1, value=3, key="lot_wn3")
+                with d4:
+                    wn4 = st.number_input("네 번째 당첨번호", min_value=1, max_value=20, step=1, value=4, key="lot_wn4")
 
-            draw_nums = [int(wn1), int(wn2), int(wn3), int(wn4)]
-            if len(set(draw_nums)) != 4:
-                st.warning("당첨번호 4개는 서로 중복될 수 없습니다.")
+                draw_nums = [int(wn1), int(wn2), int(wn3), int(wn4)]
+                if len(set(draw_nums)) != 4:
+                    st.warning("당첨번호 4개는 서로 중복될 수 없습니다.")
 
-            if st.button("당첨번호 제출", key="lot_draw_btn", use_container_width=True):
+                draw_submit = st.form_submit_button("당첨번호 제출", use_container_width=True)
+
+            if draw_submit:
                 if not current_round_id:
                     st.error("대상 복권 회차가 없습니다.")
                 elif len(set(draw_nums)) != 4:
@@ -12504,30 +12511,42 @@ if "🍀 복권" in tabs:
                 )
 
                 key_pick = "lot_user_picks"
-                if key_pick not in st.session_state:
-                    st.session_state[key_pick] = []
+                st.session_state.setdefault(key_pick, [1, 2, 3, 4])
+                st.session_state.setdefault("lot_pick_radio_1", 1)
+                st.session_state.setdefault("lot_pick_radio_2", 2)
+                st.session_state.setdefault("lot_pick_radio_3", 3)
+                st.session_state.setdefault("lot_pick_radio_4", 4)
 
-                def _toggle_pick(n: int):
-                    cur = list(st.session_state.get(key_pick, []))
+                with st.form("lottery_pick_form"):
+                    st.caption("번호를 선택한 뒤 '번호 반영' 버튼을 눌러 선택값을 확정하세요.")
+                    r_cols = st.columns(4)
+                    for idx, c in enumerate(r_cols, start=1):
+                        with c:
+                            st.radio(
+                                f"{idx}번 칸",
+                                options=list(range(1, 21)),
+                                index=max(0, min(19, int(st.session_state.get(f"lot_pick_radio_{idx}", idx) or idx) - 1)),
+                                key=f"lot_pick_radio_{idx}",
+                                horizontal=True,
+                            )
+                    apply_pick = st.form_submit_button("번호 반영", use_container_width=True)
+
+                if apply_pick:
+                    draft = [
+                        int(st.session_state.get("lot_pick_radio_1", 1) or 1),
+                        int(st.session_state.get("lot_pick_radio_2", 2) or 2),
+                        int(st.session_state.get("lot_pick_radio_3", 3) or 3),
+                        int(st.session_state.get("lot_pick_radio_4", 4) or 4),
+                    ]
+                    if len(set(draft)) != 4:
+                        st.error("중복 없는 숫자 4개를 선택해 주세요.")
                     if n in cur:
                         cur = [x for x in cur if x != n]
                     else:
-                        if len(cur) >= 4:
-                            st.warning("숫자는 최대 4개까지 선택할 수 있습니다.")
-                            return
-                        cur.append(n)
-                    st.session_state[key_pick] = sorted(cur)
+                        st.session_state[key_pick] = sorted(draft)
+                        st.success("선택 번호가 반영되었습니다.")
 
-                grid_nums = list(range(1, 21))
-                for row in range(2):
-                    cols = st.columns(10)
-                    for i, c in enumerate(cols):
-                        n = grid_nums[row * 10 + i]
-                        selected = n in st.session_state.get(key_pick, [])
-                        label = f"[{n:02d}]✅" if selected else f"[{n:02d}]"
-                        c.button(label, key=f"lot_pick_{n}", on_click=_toggle_pick, args=(n,), use_container_width=True)
-
-                picks = sorted(list(st.session_state.get(key_pick, [])))
+                picks = sorted([int(x) for x in list(st.session_state.get(key_pick, []))][:4])
                 ph_cols = st.columns(4)
                 for i in range(4):
                     with ph_cols[i]:
@@ -12540,7 +12559,11 @@ if "🍀 복권" in tabs:
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("숫자 초기화", key="lot_clear_btn", use_container_width=True):
-                        st.session_state[key_pick] = []
+                        st.session_state["lot_pick_radio_1"] = 1
+                        st.session_state["lot_pick_radio_2"] = 2
+                        st.session_state["lot_pick_radio_3"] = 3
+                        st.session_state["lot_pick_radio_4"] = 4
+                        st.session_state[key_pick] = [1, 2, 3, 4]
                         st.rerun()
                 with c2:
                     if st.button("복권 구매", key="lot_buy_btn", use_container_width=True):
@@ -12550,7 +12573,11 @@ if "🍀 복권" in tabs:
                             res = api_submit_lottery_entry(login_name, login_pin, picks)
                             if res.get("ok"):
                                 toast("복권 구매 완료! 통장에서 금액이 차감되었습니다.", icon="✅")
-                                st.session_state[key_pick] = []
+                                st.session_state[key_pick] = [1, 2, 3, 4]
+                                st.session_state["lot_pick_radio_1"] = 1
+                                st.session_state["lot_pick_radio_2"] = 2
+                                st.session_state["lot_pick_radio_3"] = 3
+                                st.session_state["lot_pick_radio_4"] = 4
                                 st.rerun()
                             else:
                                 st.error(res.get("error", "복권 구매 실패"))
