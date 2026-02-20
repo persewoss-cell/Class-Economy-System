@@ -12504,50 +12504,34 @@ if "🍀 복권" in tabs:
                 )
 
                 key_pick = "lot_user_picks"
-                key_fill_idx = "lot_user_pick_fill_idx"
-                key_radio_ver = "lot_user_radio_ver"
-
                 if key_pick not in st.session_state:
-                    st.session_state[key_pick] = [1, 2, 3, 4]
-                if key_fill_idx not in st.session_state:
-                    st.session_state[key_fill_idx] = 0
-                if key_radio_ver not in st.session_state:
-                    st.session_state[key_radio_ver] = 0
+                    st.session_state[key_pick] = []
 
-                radio_key = f"lot_user_pick_radio_{int(st.session_state.get(key_radio_ver, 0) or 0)}"
+                def _toggle_pick(n: int):
+                    cur = list(st.session_state.get(key_pick, []))
+                    if n in cur:
+                        cur = [x for x in cur if x != n]
+                    else:
+                        if len(cur) >= 4:
+                            st.warning("숫자는 최대 4개까지 선택할 수 있습니다.")
+                            return
+                        cur.append(n)
+                    st.session_state[key_pick] = sorted(cur)
 
-                def _apply_radio_pick():
-                    v = st.session_state.get(radio_key)
-                    if v is None:
-                        return
-                    try:
-                        picked_num = int(v)
-                    except Exception:
-                        return
-                    slots = list(st.session_state.get(key_pick, [1, 2, 3, 4]))
-                    fill_idx = int(st.session_state.get(key_fill_idx, 0) or 0)
-                    if fill_idx >= 4:
-                        fill_idx = 0
-                    slots[fill_idx] = picked_num
-                    st.session_state[key_pick] = slots
-                    st.session_state[key_fill_idx] = fill_idx + 1
+                grid_nums = list(range(1, 21))
+                for row in range(2):
+                    cols = st.columns(10)
+                    for i, c in enumerate(cols):
+                        n = grid_nums[row * 10 + i]
+                        selected = n in st.session_state.get(key_pick, [])
+                        label = f"[{n:02d}]✅" if selected else f"[{n:02d}]"
+                        c.button(label, key=f"lot_pick_{n}", on_click=_toggle_pick, args=(n,), use_container_width=True)
 
-                st.radio(
-                    "복권 번호 선택",
-                    options=list(range(1, 21)),
-                    format_func=lambda x: f"{int(x):02d}",
-                    horizontal=True,
-                    index=None,
-                    key=radio_key,
-                    on_change=_apply_radio_pick,
-                    label_visibility="collapsed",
-                )
-
-                picks = list(st.session_state.get(key_pick, [1, 2, 3, 4]))
+                picks = sorted(list(st.session_state.get(key_pick, [])))
                 ph_cols = st.columns(4)
                 for i in range(4):
                     with ph_cols[i]:
-                        txt = f"{int(picks[i]):02d}" if i < len(picks) else ""
+                        txt = f"{picks[i]:02d}" if i < len(picks) else ""
                         st.markdown(
                             f"<div style='height:60px;border:2px solid #888;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:700'>{txt}</div>",
                             unsafe_allow_html=True,
@@ -12556,24 +12540,17 @@ if "🍀 복권" in tabs:
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("숫자 초기화", key="lot_clear_btn", use_container_width=True):
-                        st.session_state[key_pick] = [1, 2, 3, 4]
-                        st.session_state[key_fill_idx] = 0
-                        st.session_state[key_radio_ver] = int(st.session_state.get(key_radio_ver, 0) or 0) + 1
+                        st.session_state[key_pick] = []
                         st.rerun()
                 with c2:
                     if st.button("복권 구매", key="lot_buy_btn", use_container_width=True):
-                        buy_nums = [int(x) for x in list(st.session_state.get(key_pick, [1, 2, 3, 4]))][:4]
-                        if len(buy_nums) != 4:
+                        if len(picks) != 4:
                             st.error("숫자 4개를 선택해 주세요.")
-                        elif len(set(buy_nums)) != 4:
-                            st.warning("중복되는 숫자가 있습니다. 서로 다른 숫자 4개를 선택해 주세요.")
                         else:
-                            res = api_submit_lottery_entry(login_name, login_pin, buy_nums)
+                            res = api_submit_lottery_entry(login_name, login_pin, picks)
                             if res.get("ok"):
                                 toast("복권 구매 완료! 통장에서 금액이 차감되었습니다.", icon="✅")
-                                st.session_state[key_pick] = [1, 2, 3, 4]
-                                st.session_state[key_fill_idx] = 0
-                                st.session_state[key_radio_ver] = int(st.session_state.get(key_radio_ver, 0) or 0) + 1
+                                st.session_state[key_pick] = []
                                 st.rerun()
                             else:
                                 st.error(res.get("error", "복권 구매 실패"))
