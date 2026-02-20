@@ -12725,12 +12725,17 @@ if "🍀 복권" in tabs:
                 nums_per_game = 4
                 games_raw = []
 
-                # 구매 성공 후 다음 렌더에서 입력칸 자동 초기화
-                if st.session_state.pop("lottery_clear_after_buy", False):
+                def _clear_lottery_input_fields():
                     for gi in range(game_count):
                         for ni in range(nums_per_game):
-                            st.session_state.pop(f"lot_in_{gi}_{ni}", None)
+                            key = f"lot_in_{gi}_{ni}"
+                            st.session_state[key] = ""
+                            st.session_state.pop(f"{key}__backup", None)
 
+                # 구매 성공 후 다음 렌더에서 입력칸 자동 초기화
+                if st.session_state.pop("lottery_clear_after_buy", False):
+                    _clear_lottery_input_fields()
+                    
                 with st.form("lottery_user_form", clear_on_submit=False):
                     for gi in range(game_count):
                         row_cols = st.columns([0.8, 1, 1, 1, 1])
@@ -12755,9 +12760,7 @@ if "🍀 복권" in tabs:
                         buy_clicked = st.form_submit_button("복권 구입", use_container_width=True)
 
                 if clear_clicked:
-                    for gi in range(game_count):
-                        for ni in range(nums_per_game):
-                            st.session_state.pop(f"lot_in_{gi}_{ni}", None)
+                    _clear_lottery_input_fields()
                     st.rerun()
 
                 if buy_clicked:
