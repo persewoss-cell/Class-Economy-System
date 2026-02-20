@@ -732,6 +732,57 @@ def savings_active_total(savings_list: list[dict]) -> int:
         if str(s.get("status", "")).lower().strip() in ("active", "running")
     )
 
+@st.cache_data(ttl=20, show_spinner=False)
+def _list_active_students_full_cached() -> list[dict]:
+    """활성 학생 전체를 1회 조회 후 재사용(리렌더/버튼 rerun read 절감)."""
+    docs = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
+    rows = []
+    for d in docs:
+        x = d.to_dict() or {}
+        rows.append({"student_id": d.id, **x})
+    return rows
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_invest_products_map_cached() -> dict[str, tuple[str, float]]:
+    """invest_products 전체 스냅샷 캐시(학생별 요약 계산 시 중복 stream 방지)."""
+    prod_map = {}
+    for d in db.collection(INV_PROD_COL).stream():
+        x = d.to_dict() or {}
+        pid = str(x.get("product_id", d.id) or d.id)
+        pname = (
+            str(x.get("name", "") or "").strip()
+            or str(x.get("label", "") or "").strip()
+            or str(x.get("title", "") or "").strip()
+            or str(x.get("subject", "") or "").strip()
+            or pid
+        )
+        cur_price = float(x.get("current_price", 0.0) or 0.0)
+        prod_map[pid] = (pname, cur_price)
+    return prod_map
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_role_lookup_cached() -> tuple[dict[str, str], dict[str, list[str]]]:
+    """roles + job_salary를 캐시해 학생별 직업명 조회 read를 최소화."""
+    role_by_id = {}
+    for d in db.collection("roles").stream():
+        x = d.to_dict() or {}
+        role_by_id[d.id] = str(x.get("role_name") or x.get("name") or d.id).strip() or d.id
+
+    jobs_by_student = {}
+    for jdoc in db.collection("job_salary").stream():
+        jd = jdoc.to_dict() or {}
+        jname = str(jd.get("job") or jd.get("role_name") or "").strip()
+        if not jname:
+            continue
+        for sid in [str(x) for x in (jd.get("assigned_ids", []) or [])]:
+            if sid not in jobs_by_student:
+                jobs_by_student[sid] = []
+            if jname not in jobs_by_student[sid]:
+                jobs_by_student[sid].append(jname)
+    return role_by_id, jobs_by_student
+
 # =========================
 # (관리자 개별조회용) 요약 정보 helpers
 # - 학생 번호(no) 기준 정렬 + 접힘/펼침 한 줄 요약
@@ -765,24 +816,17 @@ def _get_role_name_by_student_id(student_id: str) -> str:
 
             # ✅ role_id가 있으면 roles 컬렉션에서 이름 조회
             if rid:
-                rdoc = db.collection("roles").document(rid).get()
-                if rdoc.exists:
-                    r = rdoc.to_dict() or {}
-                    nm = str(r.get("role_name") or r.get("name") or rid).strip()
-                    return nm if nm else rid
+                role_by_id, _ = _get_role_lookup_cached()
+                nm = str(role_by_id.get(rid, rid)).strip()
+                if nm:
+                    return nm
 
                 # roles 문서가 없으면 role_id 자체를 직업명으로 보여주기
                 return rid
 
         # (2) students에 없으면 job_salary에서 assigned_ids로 찾기 (직업/월급 탭 방식)
-        jobs = []
-        for jdoc in db.collection("job_salary").stream():
-            jd = jdoc.to_dict() or {}
-            assigned = [str(x) for x in (jd.get("assigned_ids", []) or [])]
-            if sid in assigned:
-                jname = str(jd.get("job") or jd.get("role_name") or "").strip()
-                if jname:
-                    jobs.append(jname)
+        _, jobs_by_student = _get_role_lookup_cached()
+        jobs = list(jobs_by_student.get(sid, []))
 
         if jobs:
             # 중복 제거(순서 유지)
@@ -809,20 +853,7 @@ def _get_invest_summary_by_student_id(student_id: str) -> tuple[str, int]:
         sid = str(student_id)
 
         # 1) 종목 정보 맵 (id -> (name, current_price))
-        prod_map = {}
-        for d in db.collection(INV_PROD_COL).stream():
-            x = d.to_dict() or {}
-            pid = str(x.get("product_id", d.id) or d.id)
-
-            pname = (
-                str(x.get("name", "") or "").strip()
-                or str(x.get("label", "") or "").strip()
-                or str(x.get("title", "") or "").strip()
-                or str(x.get("subject", "") or "").strip()
-                or pid
-            )
-            cur_price = float(x.get("current_price", 0.0) or 0.0)
-            prod_map[pid] = (pname, cur_price)
+        prod_map = _get_invest_products_map_cached()
 
         # 2) 보유 장부(미환매) → 종목별 현재가치 합산
         q = db.collection(INV_LEDGER_COL).where(filter=FieldFilter("student_id", "==", sid)).stream()
@@ -882,18 +913,7 @@ def _get_invest_principal_by_student_id(student_id: str) -> tuple[str, int]:
         sid = str(student_id)
 
         # 1) 종목 정보 맵 (id -> name)
-        prod_name = {}
-        for d in db.collection(INV_PROD_COL).stream():
-            x = d.to_dict() or {}
-            pid = str(x.get("product_id", d.id) or d.id)
-            pname = (
-                str(x.get("name", "") or "").strip()
-                or str(x.get("label", "") or "").strip()
-                or str(x.get("title", "") or "").strip()
-                or str(x.get("subject", "") or "").strip()
-                or pid
-            )
-            prod_name[pid] = pname
+       prod_name = {k: v[0] for k, v in _get_invest_products_map_cached().items()}
 
         # 2) 보유 장부(미환매) → 종목별 원금 합산
         q = db.collection(INV_LEDGER_COL).where(filter=FieldFilter("student_id", "==", sid)).stream()
@@ -963,6 +983,7 @@ def _score_to_grade(score: int) -> int:
         return 9
     return 10
 
+@st.cache_data(ttl=60, show_spinner=False)
 def _get_credit_cfg():
     ref = db.collection("config").document("credit_scoring")
     snap = ref.get()
@@ -1253,13 +1274,11 @@ def fs_auth_student(name: str, pin: str):
 # =========================
 @st.cache_data(ttl=30, show_spinner=False)
 def api_list_accounts_cached():
-    docs = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
     items = []
-    for d in docs:
-        s = d.to_dict() or {}
+    for s in _list_active_students_full_cached():
         nm = s.get("name", "")
         if nm:
-            items.append({"student_id": d.id, "no": int(s.get("no", 0) or 0), "name": nm, "balance": int(s.get("balance", 0) or 0)})
+            items.append({"student_id": s.get("student_id", ""), "no": int(s.get("no", 0) or 0), "name": nm, "balance": int(s.get("balance", 0) or 0)})
     items.sort(key=lambda x: x["name"])
     return {"ok": True, "accounts": items}
 
@@ -4792,10 +4811,8 @@ with st.sidebar:
                     st.error("이미 존재하는 계정입니다.")
                 else:
                     # 현재 활성 계정 중 최대 번호 찾기
-                    cur_docs = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
                     max_no = 0
-                    for d in cur_docs:
-                        x = d.to_dict() or {}
+                    for x in _list_active_students_full_cached():
                         try:
                             n0 = int(x.get("no", 0) or 0)
                             if n0 > max_no:
@@ -4823,6 +4840,7 @@ with st.sidebar:
                     st.session_state.pop("manage_name", None)
                     st.session_state.pop("manage_pin", None)
                     api_list_accounts_cached.clear()
+                    _list_active_students_full_cached.clear()
                     st.rerun()
 
     with c2:
@@ -8932,10 +8950,8 @@ if "👥 계정 정보/활성화" in tabs:
         }
 
         # ✅ 학생 목록(활성 학생)
-        docs_perm = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
         stu_list = []
-        for d in docs_perm:
-            x = d.to_dict() or {}
+        for x in _list_active_students_full_cached():
             try:
                 no = int(x.get("no", 0) or 0)
             except Exception:
@@ -8945,7 +8961,7 @@ if "👥 계정 정보/활성화" in tabs:
             if not isinstance(extra, list):
                 extra = []
             stu_list.append({
-                "doc_id": d.id,
+                "doc_id": str(x.get("student_id", "") or ""),
                 "no": no,
                 "name": name,
                 "extra": [str(v) for v in extra if str(v).strip()]
@@ -9035,6 +9051,7 @@ if "👥 계정 정보/활성화" in tabs:
                     continue
                 _update_student_extra(r["doc_id"], add_keys=keys)
                 n += 1
+            _list_active_students_full_cached.clear()
             st.success(f"권한 부여 완료: {n}명")
             st.rerun()
         elif btn_revoke:
@@ -9046,15 +9063,17 @@ if "👥 계정 정보/활성화" in tabs:
                     continue
                 _update_student_extra(r["doc_id"], remove_keys=keys)
                 n += 1
+            _list_active_students_full_cached.clear()
             st.success(f"권한 회수 완료: {n}명")
             st.rerun()
 
         if btn_revoke_all and confirm_all:
             docs_perm3 = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
             n = 0
-            for d in docs_perm3:
-                db.collection("students").document(d.id).update({"extra_permissions": []})
+            for x in _list_active_students_full_cached():
+                db.collection("students").document(str(x.get("student_id", "") or "")).update({"extra_permissions": []})
                 n += 1
+            _list_active_students_full_cached.clear()
             st.success(f"전체 학생 권한 전체 회수 완료: {n}명")
             st.rerun()
 
@@ -9064,10 +9083,8 @@ if "👥 계정 정보/활성화" in tabs:
         st.markdown("### 📌 권한 부여 현황")
         st.caption("학생이 기존에 사용하던 유형의 탭(괄호 안 관리자 표기)은 관리자 기능 탭으로 구분됩니다.")
 
-        docs_perm2 = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
         rows_status = []
-        for d in docs_perm2:
-            x = d.to_dict() or {}
+        for x in _list_active_students_full_cached():
             extra = x.get("extra_permissions", []) or []
             if not isinstance(extra, list):
                 extra = []
@@ -9157,17 +9174,15 @@ if "👥 계정 정보/활성화" in tabs:
                         df_up["투자활성화"] = True
 
                     # 현재 active 학생들 맵(번호->docid, 이름->docid)
-                    cur_docs = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
                     by_no = {}
                     by_name = {}
-                    for d in cur_docs:
-                        x = d.to_dict() or {}
+                    for x in _list_active_students_full_cached():
                         no0 = x.get("no")
                         nm0 = str(x.get("name", "") or "").strip()
                         if isinstance(no0, (int, float)) and str(no0) != "nan":
-                            by_no[int(no0)] = d.id
+                            by_no[int(no0)] = str(x.get("student_id", "") or "")
                         if nm0:
-                            by_name[nm0] = d.id
+                            by_name[nm0] = str(x.get("student_id", "") or "")
 
                     created, updated, skipped = 0, 0, 0
 
@@ -9216,6 +9231,7 @@ if "👥 계정 정보/활성화" in tabs:
                             created += 1
 
                     api_list_accounts_cached.clear()
+                    _list_active_students_full_cached.clear()
                     toast(f"엑셀 등록 완료 (신규 {created} / 수정 {updated} / 제외 {skipped})", icon="📥")
                     st.rerun()
 
@@ -9227,11 +9243,8 @@ if "👥 계정 정보/활성화" in tabs:
         # ✅ 학생 리스트 로드 (번호=엑셀 번호, 그 순서대로 정렬)
         #   - student_id 컬럼은 화면에서 제거(내부로만 유지)
         # -------------------------------------------------
-        docs = db.collection("students").where(filter=FieldFilter("is_active", "==", True)).stream()
-
         rows = []
-        for d in docs:
-            x = d.to_dict() or {}
+        for x in _list_active_students_full_cached():
             # 엑셀 번호를 의미하는 "no"를 사용 (없으면 큰 값으로 뒤로)
             no = x.get("no", 999999)
             try:
@@ -9241,7 +9254,7 @@ if "👥 계정 정보/활성화" in tabs:
 
             rows.append(
                 {
-                    "_sid": d.id,  # 내부용(삭제할 때만 사용) -> 화면에는 안 보이게 처리
+                    "_sid": str(x.get("student_id", "") or ""),  # 내부용(삭제할 때만 사용) -> 화면에는 안 보이게 처리
                     "선택": False,
                     "번호": no,
                     "이름": x.get("name", ""),
