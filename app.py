@@ -913,7 +913,7 @@ def _get_invest_principal_by_student_id(student_id: str) -> tuple[str, int]:
         sid = str(student_id)
 
         # 1) 종목 정보 맵 (id -> name)
-       prod_name = {k: v[0] for k, v in _get_invest_products_map_cached().items()}
+        prod_name = {k: v[0] for k, v in _get_invest_products_map_cached().items()}
 
         # 2) 보유 장부(미환매) → 종목별 원금 합산
         q = db.collection(INV_LEDGER_COL).where(filter=FieldFilter("student_id", "==", sid)).stream()
