@@ -5120,6 +5120,7 @@ login_pin = st.session_state.login_pin
 my_student_id = None
 student_ctx = _get_login_student_context()
 if not is_admin:
+    my_student_id = str(student_ctx.get("student_id", "") or "")
 
 my_perms = _get_my_permissions_from_ctx(student_ctx, is_admin=is_admin)
 
@@ -5146,7 +5147,7 @@ def tab_visible(tab_name: str):
         return True
 
     # 학생 기본 탭(항상 표시)
-    if t in ("🏦 내 통장", "🏦 은행(적금)", "📈 투자", "🏷️ 경매", "🍀 복권"):
+    if tab_name in ("🏦 내 통장", "🏦 은행(적금)", "📈 투자", "🏷️ 경매", "🍀 복권"):
         return True
 
     # ✅ 학생에게 '탭 권한(tab::<탭이름>)'이 부여된 경우 표시
