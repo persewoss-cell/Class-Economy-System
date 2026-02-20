@@ -4105,19 +4105,15 @@ def api_list_lottery_entries(round_id: str):
 
 
 @st.cache_data(ttl=5, show_spinner=False)
-def api_list_lottery_entries_by_student(student_id: str):
+def api_list_lottery_entries_by_student(student_id: str, round_id: str = ""):
     sid = str(student_id or "").strip()
     if not sid:
         return {"ok": True, "rows": []}
 
+    rid = str(round_id or "").strip()
+
     rows = []
     try:
-        q = (
-            db.collection("lottery_entries")
-            .where(filter=FieldFilter("student_id", "==", sid))
-            .order_by("submitted_at", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
         for d in q:
             x = d.to_dict() or {}
             rows.append(
@@ -4130,7 +4126,10 @@ def api_list_lottery_entries_by_student(student_id: str):
                 }
             )
     except FailedPrecondition:
-        q = db.collection("lottery_entries").where(filter=FieldFilter("student_id", "==", sid)).stream()
+        q_ref = db.collection("lottery_entries").where(filter=FieldFilter("student_id", "==", sid))
+        if rid:
+            q_ref = q_ref.where(filter=FieldFilter("round_id", "==", rid))
+        q = q_ref.stream()
         for d in q:
             x = d.to_dict() or {}
             rows.append(
@@ -12634,14 +12633,17 @@ if "🍀 복권" in tabs:
             st.markdown("### 📜 복권 구매 내역")
             my_sid = str(my_student_id or "")
             hist_rows = []
-            if my_sid:
-                hres = api_list_lottery_entries_by_student(my_sid)
-                hist_rows = list(hres.get("rows", []) or []) if hres.get("ok") else []
-            if hist_rows:
-                st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
+            open_round_id = str(open_round.get("round_id", "") or "").strip()
+            if (not open_round_id) or (not my_sid):
+                st.info("개시된 복권이 없습니다.")
             else:
-                st.info("아직 복권 구매 내역이 없습니다.")
-
+                hres = api_list_lottery_entries_by_student(my_sid, round_id=open_round_id)
+                hist_rows = list(hres.get("rows", []) or []) if hres.get("ok") else []
+                if hist_rows:
+                    st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.info("아직 복권 구매 내역이 없습니다.")
+                    
 # =========================
 # 📊 통계/신용 (학생 전용 · 읽기 전용)
 # - 통계청 통계표(본인) + 신용등급 변동표(본인)
