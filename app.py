@@ -4111,9 +4111,14 @@ def api_list_lottery_entries_by_student(student_id: str, round_id: str = ""):
         return {"ok": True, "rows": []}
 
     rid = str(round_id or "").strip()
-
+    
+    q_ref = db.collection("lottery_entries").where(filter=FieldFilter("student_id", "==", sid))
+    if rid:
+        q_ref = q_ref.where(filter=FieldFilter("round_id", "==", rid))
+    
     rows = []
     try:
+        q = q_ref.order_by("submitted_at", direction=firestore.Query.DESCENDING).stream()
         for d in q:
             x = d.to_dict() or {}
             rows.append(
@@ -4126,9 +4131,6 @@ def api_list_lottery_entries_by_student(student_id: str, round_id: str = ""):
                 }
             )
     except FailedPrecondition:
-        q_ref = db.collection("lottery_entries").where(filter=FieldFilter("student_id", "==", sid))
-        if rid:
-            q_ref = q_ref.where(filter=FieldFilter("round_id", "==", rid))
         q = q_ref.stream()
         for d in q:
             x = d.to_dict() or {}
