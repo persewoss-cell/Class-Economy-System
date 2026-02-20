@@ -12720,88 +12720,88 @@ if "🍀 복권" in tabs:
 
                 game_count = 5
                 nums_per_game = 4
-                key_games = "lot_user_games"
-                if key_games not in st.session_state:
-                    st.session_state[key_games] = [["" for _ in range(nums_per_game)] for _ in range(game_count)]
+                games_raw = []
 
-                for gi in range(game_count):
-                    row_cols = st.columns([0.8, 1, 1, 1, 1])
-                    with row_cols[0]:
-                        st.markdown(f"**{gi + 1}게임:**")
-                    for ni in range(nums_per_game):
-                        k = f"lot_in_{gi}_{ni}"
-                        current_val = st.session_state[key_games][gi][ni]
-                        raw = row_cols[ni + 1].text_input(
-                            label="",
-                            value=str(current_val),
-                            key=k,
-                            placeholder="(숫자 입력칸)",
-                            label_visibility="collapsed",
-                        )
-                        st.session_state[key_games][gi][ni] = raw.strip()
+                with st.form("lottery_user_form", clear_on_submit=False):
+                    for gi in range(game_count):
+                        row_cols = st.columns([0.8, 1, 1, 1, 1])
+                        with row_cols[0]:
+                            st.markdown(f"**{gi + 1}게임:**")
+                        row_vals = []
+                        for ni in range(nums_per_game):
+                            k = f"lot_in_{gi}_{ni}"
+                            raw = row_cols[ni + 1].text_input(
+                                label="",
+                                key=k,
+                                placeholder="(숫자 입력칸)",
+                                label_visibility="collapsed",
+                            )
+                            row_vals.append(str(raw).strip())
+                        games_raw.append(row_vals)
 
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("숫자 초기화", key="lot_clear_btn", use_container_width=True):
-                        st.session_state[key_games] = [["" for _ in range(nums_per_game)] for _ in range(game_count)]
-                        for gi in range(game_count):
-                            for ni in range(nums_per_game):
-                                st.session_state[f"lot_in_{gi}_{ni}"] = ""
-                        st.rerun()
-                with c2:
-                    if st.button("복권 구입", key="lot_buy_btn", use_container_width=True):
-                        games_raw = st.session_state.get(key_games, [])
-                        valid_games = []
-                        has_error = False
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        clear_clicked = st.form_submit_button("숫자 초기화", use_container_width=True)
+                    with c2:
+                        buy_clicked = st.form_submit_button("복권 구입", use_container_width=True)
 
-                        for idx, game in enumerate(games_raw):
-                            vals = [str(x).strip() for x in (game or [])]
-                            filled = [v for v in vals if v != ""]
-                            if not filled:
-                                continue
-                            if len(filled) != nums_per_game:
-                                st.error(f"{idx + 1}게임: 숫자 4개를 모두 입력해 주세요.")
+                if clear_clicked:
+                    for gi in range(game_count):
+                        for ni in range(nums_per_game):
+                            st.session_state.pop(f"lot_in_{gi}_{ni}", None)
+                    st.rerun()
+
+                if buy_clicked:
+                    valid_games = []
+                    has_error = False
+
+                    for idx, game in enumerate(games_raw):
+                        vals = [str(x).strip() for x in (game or [])]
+                        filled = [v for v in vals if v != ""]
+                        if not filled:
+                            continue
+                        if len(filled) != nums_per_game:
+                            st.error(f"{idx + 1}게임: 숫자 4개를 모두 입력해 주세요.")
+                            has_error = True
+                            continue
+
+                        parsed = []
+                        for v in vals:
+                            if not v.isdigit():
+                                st.error(f"{idx + 1}게임: 숫자만 입력해 주세요.")
                                 has_error = True
-                                continue
-
-                            parsed = []
-                            for v in vals:
-                                if not v.isdigit():
-                                    st.error(f"{idx + 1}게임: 숫자만 입력해 주세요.")
-                                    has_error = True
-                                    parsed = []
-                                    break
-                                n = int(v)
-                                if n < 1 or n > 20:
-                                    st.error(f"{idx + 1}게임: 숫자는 1~20 사이여야 합니다.")
-                                    has_error = True
-                                    parsed = []
-                                    break
-                                parsed.append(n)
-
-                            if not parsed:
-                                continue
-                            if len(set(parsed)) != nums_per_game:
-                                st.error(f"{idx + 1}게임: 같은 숫자를 중복 입력할 수 없습니다.")
+                                parsed = []
+                                break
+                            n = int(v)
+                            if n < 1 or n > 20:
+                                st.error(f"{idx + 1}게임: 숫자는 1~20 사이여야 합니다.")
                                 has_error = True
-                                continue
+                                parsed = []
+                                break
+                            parsed.append(n)
 
-                            valid_games.append(parsed)
+                        if not parsed:
+                            continue
+                        if len(set(parsed)) != nums_per_game:
+                            st.error(f"{idx + 1}게임: 같은 숫자를 중복 입력할 수 없습니다.")
+                            has_error = True
+                            continue
+                            
+                        valid_games.append(parsed)
 
-                        if not has_error:
-                            if not valid_games:
-                                st.error("입력된 게임이 없습니다. 최소 1게임 이상 입력해 주세요.")
+                    if not has_error:
+                        if not valid_games:
+                            st.error("입력된 게임이 없습니다. 최소 1게임 이상 입력해 주세요.")
+                        else:
+                            res = api_submit_lottery_entries(login_name, login_pin, valid_games)
+                            if res.get("ok"):
+                                toast(f"복권 {int(res.get('count', 0) or 0)}게임 구매 완료! 통장에서 금액이 차감되었습니다.", icon="✅")
+                                for gi in range(game_count):
+                                    for ni in range(nums_per_game):
+                                        st.session_state.pop(f"lot_in_{gi}_{ni}", None)
+                                st.rerun()
                             else:
-                                res = api_submit_lottery_entries(login_name, login_pin, valid_games)
-                                if res.get("ok"):
-                                    toast(f"복권 {int(res.get('count', 0) or 0)}게임 구매 완료! 통장에서 금액이 차감되었습니다.", icon="✅")
-                                    st.session_state[key_games] = [["" for _ in range(nums_per_game)] for _ in range(game_count)]
-                                    for gi in range(game_count):
-                                        for ni in range(nums_per_game):
-                                            st.session_state[f"lot_in_{gi}_{ni}"] = ""
-                                    st.rerun()
-                                else:
-                                    st.error(res.get("error", "복권 구매 실패"))
+                                st.error(res.get("error", "복권 구매 실패"))
                                     
             st.markdown("### 📜 복권 구매 내역")
             my_sid = str(my_student_id or "")
