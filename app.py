@@ -3889,6 +3889,7 @@ def _normalize_lottery_numbers(nums) -> list[int]:
     out = sorted(list(dict.fromkeys(out)))
     return out
 
+@st.cache_data(ttl=5, show_spinner=False)
 def _get_lottery_state() -> dict:
     snap = db.collection("config").document(LOT_STATE_DOC).get()
     if not snap.exists:
@@ -3900,6 +3901,7 @@ def _get_lottery_state() -> dict:
         "status": str(d.get("status", "idle") or "idle"),
     }
 
+@st.cache_data(ttl=5, show_spinner=False)
 def api_get_open_lottery_round() -> dict:
     stt = _get_lottery_state()
     rid = str(stt.get("current_round_id", "") or "")
@@ -4008,6 +4010,8 @@ def api_open_lottery(admin_pin: str, cfg: dict):
 
     try:
         no = int(_do(db.transaction()))
+        _get_lottery_state.clear()
+        api_get_open_lottery_round.clear()
         return {"ok": True, "round_no": no}
     except ValueError as e:
         return {"ok": False, "error": str(e)}
@@ -4042,12 +4046,15 @@ def api_close_lottery(admin_pin: str):
 
     try:
         out = _do(db.transaction())
+        _get_lottery_state.clear()
+        api_get_open_lottery_round.clear()
         return {"ok": True, **out}
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": f"복권 마감 실패: {e}"}
 
+@st.cache_data(ttl=5, show_spinner=False)
 def api_list_lottery_entries(round_id: str):
     rid = str(round_id or "").strip()
     if not rid:
@@ -4094,6 +4101,55 @@ def api_list_lottery_entries(round_id: str):
             )
         )
 
+    return {"ok": True, "rows": rows}
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def api_list_lottery_entries_by_student(student_id: str):
+    sid = str(student_id or "").strip()
+    if not sid:
+        return {"ok": True, "rows": []}
+
+    rows = []
+    try:
+        q = (
+            db.collection("lottery_entries")
+            .where(filter=FieldFilter("student_id", "==", sid))
+            .order_by("submitted_at", direction=firestore.Query.DESCENDING)
+            .stream()
+        )
+        for d in q:
+            x = d.to_dict() or {}
+            rows.append(
+                {
+                    "회차": int(x.get("round_no", 0) or 0),
+                    "번호": int(x.get("student_no", 0) or 0),
+                    "이름": str(x.get("student_name", "") or ""),
+                    "복권 참여 번호": ", ".join([f"{n:02d}" for n in _normalize_lottery_numbers(x.get("numbers", []))]),
+                    "_submitted_at": x.get("submitted_at"),
+                }
+            )
+    except FailedPrecondition:
+        q = db.collection("lottery_entries").where(filter=FieldFilter("student_id", "==", sid)).stream()
+        for d in q:
+            x = d.to_dict() or {}
+            rows.append(
+                {
+                    "회차": int(x.get("round_no", 0) or 0),
+                    "번호": int(x.get("student_no", 0) or 0),
+                    "이름": str(x.get("student_name", "") or ""),
+                    "복권 참여 번호": ", ".join([f"{n:02d}" for n in _normalize_lottery_numbers(x.get("numbers", []))]),
+                    "_submitted_at": x.get("submitted_at"),
+                }
+            )
+
+    if rows:
+        rows.sort(
+            key=lambda r: _to_utc_datetime(r.get("_submitted_at")).timestamp() if r.get("_submitted_at") else float("-inf"),
+            reverse=True,
+        )
+        for r in rows:
+            r.pop("_submitted_at", None)
     return {"ok": True, "rows": rows}
 
 def api_submit_lottery_entry(name: str, pin: str, numbers: list[int]):
@@ -4167,6 +4223,9 @@ def api_submit_lottery_entry(name: str, pin: str, numbers: list[int]):
 
     try:
         nb = int(_do(db.transaction()))
+        api_list_lottery_entries.clear()
+        api_list_lottery_entries_by_student.clear()
+        api_get_open_lottery_round.clear()
         return {"ok": True, "balance": nb}
     except ValueError as e:
         return {"ok": False, "error": str(e)}
@@ -4278,6 +4337,8 @@ def api_draw_lottery(admin_pin: str, round_id: str, winning_numbers: list[int]):
         },
         merge=True,
     )
+    api_list_lottery_entries.clear()
+    api_get_open_lottery_round.clear()
     return {"ok": True, "winners": winner_rows}
 
 def api_pay_lottery_prizes(admin_pin: str, round_id: str):
@@ -4324,6 +4385,8 @@ def api_pay_lottery_prizes(admin_pin: str, round_id: str):
         },
         merge=True,
     )
+    api_list_lottery_entries.clear()
+    api_list_lottery_entries_by_student.clear()
     return {"ok": True, "paid_total": int(paid_total)}
 
 def _calc_lottery_financials(round_row: dict) -> dict:
@@ -12572,48 +12635,8 @@ if "🍀 복권" in tabs:
             my_sid = str(my_student_id or "")
             hist_rows = []
             if my_sid:
-                try:
-                    q = (
-                        db.collection("lottery_entries")
-                        .where(filter=FieldFilter("student_id", "==", my_sid))
-                        .order_by("submitted_at", direction=firestore.Query.DESCENDING)
-                        .stream()
-                    )
-                    for d in q:
-                        x = d.to_dict() or {}
-                        hist_rows.append(
-                            {
-                                "회차": int(x.get("round_no", 0) or 0),
-                                "번호": int(x.get("student_no", 0) or 0),
-                                "이름": str(x.get("student_name", "") or ""),
-                                "복권 참여 번호": ", ".join([f"{n:02d}" for n in _normalize_lottery_numbers(x.get("numbers", []))]),
-                                "_submitted_at": x.get("submitted_at"),
-                            }
-                        )
-                except FailedPrecondition:
-                    # 복합 인덱스 미생성 환경 대응: 정렬 없는 조회 후 앱에서 submitted_at 역순 정렬
-                    q = db.collection("lottery_entries").where(filter=FieldFilter("student_id", "==", my_sid)).stream()
-                    for d in q:
-                        x = d.to_dict() or {}
-                        hist_rows.append(
-                            {
-                                "회차": int(x.get("round_no", 0) or 0),
-                                "번호": int(x.get("student_no", 0) or 0),
-                                "이름": str(x.get("student_name", "") or ""),
-                                "복권 참여 번호": ", ".join([f"{n:02d}" for n in _normalize_lottery_numbers(x.get("numbers", []))]),
-                                "_submitted_at": x.get("submitted_at"),
-                            }
-                        )
-
-                if hist_rows:
-                    hist_rows.sort(
-                        key=lambda r: (
-                            _to_utc_datetime(r.get("_submitted_at")).timestamp() if r.get("_submitted_at") else float("-inf")
-                        ),
-                        reverse=True,
-                    )
-                    for r in hist_rows:
-                        r.pop("_submitted_at", None)
+                hres = api_list_lottery_entries_by_student(my_sid)
+                hist_rows = list(hres.get("rows", []) or []) if hres.get("ok") else []
             if hist_rows:
                 st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
             else:
