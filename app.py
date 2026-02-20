@@ -1269,6 +1269,48 @@ def fs_auth_student(name: str, pin: str):
         return None
     return doc
 
+
+def _set_login_student_context_from_doc(doc):
+    """로그인 시점 1회만 student 스냅샷 저장(렌더링 중 재인증 read 방지)."""
+    if not doc:
+        st.session_state["login_student_ctx"] = {}
+        return
+    data = doc.to_dict() or {}
+    st.session_state["login_student_ctx"] = {
+        "student_id": str(doc.id),
+        "name": str(data.get("name", "") or ""),
+        "balance": int(data.get("balance", 0) or 0),
+        "credit_grade": int(data.get("credit_grade", 0) or 0),
+        "role_id": str(data.get("role_id", "") or ""),
+        "extra_permissions": list(data.get("extra_permissions", []) or []),
+    }
+
+
+def _get_login_student_context() -> dict:
+    return dict(st.session_state.get("login_student_ctx", {}) or {})
+
+
+def _get_my_permissions_from_ctx(student_ctx: dict, is_admin: bool):
+    if is_admin:
+        return {"admin_all"}
+    if not student_ctx:
+        return set()
+
+    perms = set()
+    role_id = str(student_ctx.get("role_id", "") or "")
+    if role_id:
+        # 역할 문서는 캐시 함수 사용(렌더링 중 직접 get 방지)
+        role_rows = api_list_roles_cached().get("roles", [])
+        for r in role_rows:
+            if str(r.get("role_id", "")) == role_id:
+                perms |= set(list(r.get("permissions", []) or []))
+                break
+
+    extra = student_ctx.get("extra_permissions", []) or []
+    if isinstance(extra, list):
+        perms |= set([str(x) for x in extra if str(x).strip()])
+    return perms
+
 # =========================
 # Cached lists
 # =========================
@@ -3209,14 +3251,18 @@ def render_treasury_trade_ui(prefix: str, templates_list: list, template_by_disp
 # =========================
 # Templates (공용) - 너 코드 유지
 # =========================
-tpl_res = api_list_templates_cached()
-TEMPLATES = tpl_res.get("templates", []) if tpl_res.get("ok") else []
+def _get_trade_templates_state():
+    """전역 실행 시 Firestore read 방지: 템플릿은 함수 내부에서만 조회."""
+    tpl_res = api_list_templates_cached()
+    templates = tpl_res.get("templates", []) if tpl_res.get("ok") else []
+    return {
+        "templates": templates,
+        "by_display": {template_display_for_trade(t): t for t in templates},
+    }
 
 def template_display_for_trade(t):
     kind_kr = "입금" if t["kind"] == "deposit" else "출금"
     return f"{t['label']}[{kind_kr} {int(t['amount'])}]"
-
-TEMPLATE_BY_DISPLAY = {template_display_for_trade(t): t for t in TEMPLATES}
 
 # =========================
 # ✅ 공용: 거래 입력 UI (너 코드 그대로)
@@ -5011,6 +5057,7 @@ if not st.session_state.logged_in:
                 st.session_state.logged_in = True
                 st.session_state.login_name = ADMIN_NAME
                 st.session_state.login_pin = ADMIN_PIN
+                st.session_state["login_student_ctx"] = {}
                 # ✅ 이름 저장 처리
                 try:
                     if bool(st.session_state.get("remember_name_check", False)):
@@ -5032,6 +5079,7 @@ if not st.session_state.logged_in:
                     st.session_state.logged_in = True
                     st.session_state.login_name = login_name
                     st.session_state.login_pin = login_pin
+                    _set_login_student_context_from_doc(doc)
                 # ✅ 이름 저장 처리
                 try:
                     if bool(st.session_state.get("remember_name_check", False)):
@@ -5052,6 +5100,7 @@ else:
         st.session_state.login_name = ""
         st.session_state.login_pin = ""
         st.session_state.undo_mode = False
+        st.session_state["login_student_ctx"] = {}
 
         # ✅ (PATCH) 개별조회 지연로딩 상태 완전 초기화 (로그아웃 후 재로그인 시 자동 로드 방지)
         st.session_state.pop("admin_ind_view_loaded", None)
@@ -5069,12 +5118,10 @@ login_name = st.session_state.login_name
 login_pin = st.session_state.login_pin
 
 my_student_id = None
+student_ctx = _get_login_student_context()
 if not is_admin:
-    bal_res = api_get_balance(login_name, login_pin)
-    if bal_res.get("ok"):
-        my_student_id = bal_res.get("student_id")
 
-my_perms = get_my_permissions(my_student_id, is_admin=is_admin)
+my_perms = _get_my_permissions_from_ctx(student_ctx, is_admin=is_admin)
 
 # =========================
 # (관리자) 학급 시스템 탭 + (학생) 접근 가능한 탭만
@@ -6152,10 +6199,11 @@ if "🏦 내 통장" in tabs:
 
             # ✅ 거래 기록 (DuplicateElementKey 방지: prefix를 탭 전용으로 변경)
             st.subheader("📝 통장 기록하기")
+            _tpl_state = _get_trade_templates_state()
             memo_u, dep_u, wd_u = render_admin_trade_ui(
                 prefix=f"bank_trade_{login_name}",
-                templates_list=TEMPLATES,
-                template_by_display=TEMPLATE_BY_DISPLAY,
+                templates_list=_tpl_state["templates"],
+                template_by_display=_tpl_state["by_display"],
             )
 
             col_btn1, col_btn2 = st.columns([1, 1])
