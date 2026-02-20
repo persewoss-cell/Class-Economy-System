@@ -12715,12 +12715,21 @@ if "🍀 복권" in tabs:
                 st.info("개시된 복권이 없습니다.")
             else:
                 st.markdown(
-                    f"{int(open_round.get('round_no', 0) or 0)}회차 / 복권 가격 {int(open_round.get('ticket_price', 0) or 0):02d}"
+                    f"🔔 {int(open_round.get('round_no', 0) or 0)}회차 | 복권 가격 {int(open_round.get('ticket_price', 0) or 0):02d}"
                 )
-
+                st.caption("※ 한 게임(한 줄)에는 4개의 숫자를 입력해야 합니다.")
+                st.caption("※ 각 칸에는 1~20 사이의 숫자만 입력할 수 있으며, 한 줄 안에서는 숫자가 중복될 수 없습니다.")
+                st.caption("※ 구매할 게임 수만큼 숫자를 입력한 후, 구매 버튼을 눌러주세요.")
+                
                 game_count = 5
                 nums_per_game = 4
                 games_raw = []
+
+                # 구매 성공 후 다음 렌더에서 입력칸 자동 초기화
+                if st.session_state.pop("lottery_clear_after_buy", False):
+                    for gi in range(game_count):
+                        for ni in range(nums_per_game):
+                            st.session_state.pop(f"lot_in_{gi}_{ni}", None)
 
                 with st.form("lottery_user_form", clear_on_submit=False):
                     for gi in range(game_count):
@@ -12796,9 +12805,7 @@ if "🍀 복권" in tabs:
                             res = api_submit_lottery_entries(login_name, login_pin, valid_games)
                             if res.get("ok"):
                                 toast(f"복권 {int(res.get('count', 0) or 0)}게임 구매 완료! 통장에서 금액이 차감되었습니다.", icon="✅")
-                                for gi in range(game_count):
-                                    for ni in range(nums_per_game):
-                                        st.session_state.pop(f"lot_in_{gi}_{ni}", None)
+                                st.session_state["lottery_clear_after_buy"] = True
                                 st.rerun()
                             else:
                                 st.error(res.get("error", "복권 구매 실패"))
