@@ -12715,7 +12715,7 @@ if "🍀 복권" in tabs:
                 st.info("개시된 복권이 없습니다.")
             else:
                 st.markdown(
-                    f"{int(open_round.get('round_no', 0) or 0)}회차 1 복권 가격 {int(open_round.get('ticket_price', 0) or 0):02d}"
+                    f"{int(open_round.get('round_no', 0) or 0)}회차 / 복권 가격 {int(open_round.get('ticket_price', 0) or 0):02d}"
                 )
 
                 game_count = 5
