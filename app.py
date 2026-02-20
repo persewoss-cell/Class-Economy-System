@@ -12760,7 +12760,7 @@ if "🍀 복권" in tabs:
                         buy_clicked = st.form_submit_button("복권 구입", use_container_width=True)
 
                 if clear_clicked:
-                    _clear_lottery_input_fields()
+                    st.session_state["lottery_clear_after_buy"] = True
                     st.rerun()
 
                 if buy_clicked:
