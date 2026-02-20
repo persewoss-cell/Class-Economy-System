@@ -4279,6 +4279,95 @@ def api_submit_lottery_entry(name: str, pin: str, numbers: list[int]):
     except Exception as e:
         return {"ok": False, "error": f"복권 구매 실패: {e}"}
 
+def api_submit_lottery_entries(name: str, pin: str, games: list[list[int]]):
+    student_doc = fs_auth_student(name, pin)
+    if not student_doc:
+        return {"ok": False, "error": "이름 또는 비밀번호가 틀립니다."}
+
+    normalized_games = []
+    for g in (games or []):
+        nums = _normalize_lottery_numbers(g)
+        if len(nums) != 4:
+            return {"ok": False, "error": "각 게임은 1~20 숫자 중 중복 없이 4개여야 합니다."}
+        normalized_games.append(nums)
+
+    if not normalized_games:
+        return {"ok": False, "error": "구매할 게임이 없습니다."}
+
+    op = api_get_open_lottery_round()
+    if not op.get("ok"):
+        return {"ok": False, "error": "개시된 복권이 없습니다."}
+    rnd = op.get("round", {}) or {}
+    rid = str(rnd.get("round_id", "") or "")
+    round_no = int(rnd.get("round_no", 0) or 0)
+    price = int(rnd.get("ticket_price", 20) or 20)
+    if price <= 0:
+        return {"ok": False, "error": "복권 가격 설정이 올바르지 않습니다."}
+
+    total_price = int(price * len(normalized_games))
+    student_ref = db.collection("students").document(student_doc.id)
+    round_ref = db.collection("lottery_rounds").document(rid)
+    tx_ref = db.collection("transactions").document()
+
+    @firestore.transactional
+    def _do(tx):
+        r_snap = round_ref.get(transaction=tx)
+        if not r_snap.exists:
+            raise ValueError("복권 회차를 찾지 못했습니다.")
+        r = r_snap.to_dict() or {}
+        if str(r.get("status", "")) != "open":
+            raise ValueError("마감된 복권은 구매할 수 없습니다.")
+
+        s_snap = student_ref.get(transaction=tx)
+        if not s_snap.exists:
+            raise ValueError("학생 계정을 찾지 못했습니다.")
+        s = s_snap.to_dict() or {}
+        bal = int(s.get("balance", 0) or 0)
+        if bal < total_price:
+            raise ValueError("잔액이 부족하여 복권을 구매할 수 없습니다.")
+
+        new_bal = int(bal - total_price)
+        tx.update(student_ref, {"balance": new_bal})
+        tx.set(
+            tx_ref,
+            {
+                "student_id": student_doc.id,
+                "type": "withdraw",
+                "amount": int(-total_price),
+                "balance_after": int(new_bal),
+                "memo": f"복권 {int(round_no)}회 {len(normalized_games)}게임 구매",
+                "created_at": firestore.SERVER_TIMESTAMP,
+            },
+        )
+
+        for nums in normalized_games:
+            entry_ref = db.collection("lottery_entries").document()
+            tx.set(
+                entry_ref,
+                {
+                    "round_id": rid,
+                    "round_no": int(round_no),
+                    "student_id": student_doc.id,
+                    "student_no": int(s.get("no", 0) or 0),
+                    "student_name": str(s.get("name", "") or name),
+                    "numbers": nums,
+                    "submitted_at": firestore.SERVER_TIMESTAMP,
+                    "ticket_price": int(price),
+                },
+            )
+        return new_bal
+
+    try:
+        nb = int(_do(db.transaction()))
+        api_list_lottery_entries.clear()
+        api_list_lottery_entries_by_student.clear()
+        api_get_open_lottery_round.clear()
+        return {"ok": True, "balance": nb, "count": len(normalized_games)}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"복권 구매 실패: {e}"}
+
 def api_draw_lottery(admin_pin: str, round_id: str, winning_numbers: list[int]):
     if not is_admin_pin(admin_pin):
         return {"ok": False, "error": "관리자 PIN이 틀립니다."}
@@ -12625,62 +12714,95 @@ if "🍀 복권" in tabs:
             if not open_round:
                 st.info("개시된 복권이 없습니다.")
             else:
-                st.caption(
-                    f"{int(open_round.get('round_no', 0) or 0)}회차 | 복권 가격 {int(open_round.get('ticket_price', 0) or 0)}"
+                st.markdown(
+                    f"{int(open_round.get('round_no', 0) or 0)}회차 1 복권 가격 {int(open_round.get('ticket_price', 0) or 0):02d}"
                 )
 
-                key_pick = "lot_user_picks"
-                if key_pick not in st.session_state:
-                    st.session_state[key_pick] = []
+                game_count = 5
+                nums_per_game = 4
+                key_games = "lot_user_games"
+                if key_games not in st.session_state:
+                    st.session_state[key_games] = [["" for _ in range(nums_per_game)] for _ in range(game_count)]
 
-                def _toggle_pick(n: int):
-                    cur = list(st.session_state.get(key_pick, []))
-                    if n in cur:
-                        cur = [x for x in cur if x != n]
-                    else:
-                        if len(cur) >= 4:
-                            st.warning("숫자는 최대 4개까지 선택할 수 있습니다.")
-                            return
-                        cur.append(n)
-                    st.session_state[key_pick] = sorted(cur)
-
-                grid_nums = list(range(1, 21))
-                for row in range(2):
-                    cols = st.columns(10)
-                    for i, c in enumerate(cols):
-                        n = grid_nums[row * 10 + i]
-                        selected = n in st.session_state.get(key_pick, [])
-                        label = f"[{n:02d}]✅" if selected else f"[{n:02d}]"
-                        c.button(label, key=f"lot_pick_{n}", on_click=_toggle_pick, args=(n,), use_container_width=True)
-
-                picks = sorted(list(st.session_state.get(key_pick, [])))
-                ph_cols = st.columns(4)
-                for i in range(4):
-                    with ph_cols[i]:
-                        txt = f"{picks[i]:02d}" if i < len(picks) else ""
-                        st.markdown(
-                            f"<div style='height:60px;border:2px solid #888;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:700'>{txt}</div>",
-                            unsafe_allow_html=True,
+                for gi in range(game_count):
+                    row_cols = st.columns([0.8, 1, 1, 1, 1])
+                    with row_cols[0]:
+                        st.markdown(f"**{gi + 1}게임:**")
+                    for ni in range(nums_per_game):
+                        k = f"lot_in_{gi}_{ni}"
+                        current_val = st.session_state[key_games][gi][ni]
+                        raw = row_cols[ni + 1].text_input(
+                            label="",
+                            value=str(current_val),
+                            key=k,
+                            placeholder="(숫자 입력칸)",
+                            label_visibility="collapsed",
                         )
+                        st.session_state[key_games][gi][ni] = raw.strip()
 
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("숫자 초기화", key="lot_clear_btn", use_container_width=True):
-                        st.session_state[key_pick] = []
+                        st.session_state[key_games] = [["" for _ in range(nums_per_game)] for _ in range(game_count)]
+                        for gi in range(game_count):
+                            for ni in range(nums_per_game):
+                                st.session_state[f"lot_in_{gi}_{ni}"] = ""
                         st.rerun()
                 with c2:
-                    if st.button("복권 구매", key="lot_buy_btn", use_container_width=True):
-                        if len(picks) != 4:
-                            st.error("숫자 4개를 선택해 주세요.")
-                        else:
-                            res = api_submit_lottery_entry(login_name, login_pin, picks)
-                            if res.get("ok"):
-                                toast("복권 구매 완료! 통장에서 금액이 차감되었습니다.", icon="✅")
-                                st.session_state[key_pick] = []
-                                st.rerun()
-                            else:
-                                st.error(res.get("error", "복권 구매 실패"))
+                    if st.button("복권 구입", key="lot_buy_btn", use_container_width=True):
+                        games_raw = st.session_state.get(key_games, [])
+                        valid_games = []
+                        has_error = False
 
+                        for idx, game in enumerate(games_raw):
+                            vals = [str(x).strip() for x in (game or [])]
+                            filled = [v for v in vals if v != ""]
+                            if not filled:
+                                continue
+                            if len(filled) != nums_per_game:
+                                st.error(f"{idx + 1}게임: 숫자 4개를 모두 입력해 주세요.")
+                                has_error = True
+                                continue
+
+                            parsed = []
+                            for v in vals:
+                                if not v.isdigit():
+                                    st.error(f"{idx + 1}게임: 숫자만 입력해 주세요.")
+                                    has_error = True
+                                    parsed = []
+                                    break
+                                n = int(v)
+                                if n < 1 or n > 20:
+                                    st.error(f"{idx + 1}게임: 숫자는 1~20 사이여야 합니다.")
+                                    has_error = True
+                                    parsed = []
+                                    break
+                                parsed.append(n)
+
+                            if not parsed:
+                                continue
+                            if len(set(parsed)) != nums_per_game:
+                                st.error(f"{idx + 1}게임: 같은 숫자를 중복 입력할 수 없습니다.")
+                                has_error = True
+                                continue
+
+                            valid_games.append(parsed)
+
+                        if not has_error:
+                            if not valid_games:
+                                st.error("입력된 게임이 없습니다. 최소 1게임 이상 입력해 주세요.")
+                            else:
+                                res = api_submit_lottery_entries(login_name, login_pin, valid_games)
+                                if res.get("ok"):
+                                    toast(f"복권 {int(res.get('count', 0) or 0)}게임 구매 완료! 통장에서 금액이 차감되었습니다.", icon="✅")
+                                    st.session_state[key_games] = [["" for _ in range(nums_per_game)] for _ in range(game_count)]
+                                    for gi in range(game_count):
+                                        for ni in range(nums_per_game):
+                                            st.session_state[f"lot_in_{gi}_{ni}"] = ""
+                                    st.rerun()
+                                else:
+                                    st.error(res.get("error", "복권 구매 실패"))
+                                    
             st.markdown("### 📜 복권 구매 내역")
             my_sid = str(my_student_id or "")
             hist_rows = []
