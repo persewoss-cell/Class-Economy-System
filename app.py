@@ -3945,6 +3945,7 @@ def api_apply_auction_ledger(admin_pin: str, round_id: str, refund_non_winners: 
             "bid_date": _fmt_auction_dt(r.get("opened_at")),
             "bid_name": str(r.get("bid_name", "") or ""),
             "participants": participants,
+            "total_bid_amount": int(total),
             "total_amount": int(tre_total),
             "refund_non_winners": bool(refund_non_winners),
             "fee_amount": int(fee_total),
@@ -3961,13 +3962,18 @@ def api_list_auction_admin_ledger(limit=100):
     rows = []
     for d in q:
         x = d.to_dict() or {}
+        refund_non_winners = bool(x.get("refund_non_winners", False))
+        winner_amount = int(x.get("winner_amount", 0) or 0)
+        total_bid_amount = int(x.get("total_bid_amount", x.get("total_amount", 0)) or 0)
+        settled_bid_amount = int(winner_amount if refund_non_winners else total_bid_amount)
         rows.append(
             {
                 "입찰번호": int(x.get("round_no", 0) or 0),
                 "입찰기일": str(x.get("bid_date", "") or ""),
                 "입찰 내역": str(x.get("bid_name", "") or ""),
                 "입찰 참가수": int(x.get("participants", 0) or 0),
-                "낙잘금 수수료 총액": int(x.get("fee_amount", 0) or 0),
+                "낙찰금": settled_bid_amount,
+                "낙찰금 수수료 총액": int(x.get("fee_amount", 0) or 0),
                 "총 액수": int(x.get("total_amount", 0) or 0),
             }
         )
@@ -12748,10 +12754,24 @@ if "🍀 복권" in tabs:
                             apply_treasury=bool(lot_apply_treasury),
                         )
                         if ares.get("ok"):
+                            st.session_state["lot_admin_join_summary"] = {
+                                "count": int(ares.get("count", 0) or 0),
+                                "total_cost": int(ares.get("total_cost", 0) or 0),
+                                "treasury_applied": bool(ares.get("treasury_applied", False)),
+                            }
                             toast(f"관리자 복권 {int(ares.get('count', 0) or 0)}게임 참여 완료", icon="✅")
                             st.rerun()
                         else:
                             st.error(ares.get("error", "관리자 복권 참여 실패"))
+
+                join_summary = st.session_state.get("lot_admin_join_summary") or {}
+                if join_summary:
+                    st.caption(
+                        "복권 참여 현황 | "
+                        f"복권 참여수 {int(join_summary.get('count', 0) or 0):02d}  |  "
+                        f"총액 {int(join_summary.get('total_cost', 0) or 0)}  |  "
+                        f"국고반영여부 {'O' if bool(join_summary.get('treasury_applied', False)) else 'X'}"
+                    )
             else:
                 st.info("개시된 복권이 없습니다.")
             
