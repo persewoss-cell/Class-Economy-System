@@ -3,6 +3,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 import pandas as pd
 import altair as alt
 from io import BytesIO
+import random
 
 from datetime import datetime, timezone, timedelta, date
 
@@ -126,7 +127,14 @@ st.markdown(
         box-shadow: none !important;
         outline: none !important;
     }
-    
+
+    /* 🎟️ 복권 구매(사용자 모드) 숫자 입력칸 게임별 배경색 */
+    input[aria-label^="1게임 "] { background-color: #f6ddc7 !important; }
+    input[aria-label^="2게임 "] { background-color: #efe5a6 !important; }
+    input[aria-label^="3게임 "] { background-color: #cfe3c0 !important; }
+    input[aria-label^="4게임 "] { background-color: #d3ddf0 !important; }
+    input[aria-label^="5게임 "] { background-color: #e3d8ef !important; }
+
 /* ✅ DataFrame/DataEditor: 바깥 네모 박스(테두리/여백)만 줄이기 */
 [data-testid="stDataFrame"]{
     overflow-x: auto;
@@ -3797,6 +3805,7 @@ def api_list_auction_bids(round_id: str):
             {
                 "bid_id": d.id,
                 "round_no": int(r.get("round_no", 0) or 0),
+                "student_id": str(r.get("student_id", "") or ""),
                 "student_no": int(r.get("student_no", 0) or 0),
                 "student_name": str(r.get("student_name", "") or ""),
                 "amount": int(r.get("amount", 0) or 0),
@@ -3840,7 +3849,7 @@ def api_get_latest_closed_auction_round():
             
     return {"ok": False, "error": "마감된 경매가 없습니다."}
 
-def api_apply_auction_ledger(admin_pin: str, round_id: str):
+def api_apply_auction_ledger(admin_pin: str, round_id: str, refund_non_winners: bool = False):
     if not is_admin_pin(admin_pin):
         return {"ok": False, "error": "관리자 PIN이 틀립니다."}
 
@@ -3861,11 +3870,51 @@ def api_apply_auction_ledger(admin_pin: str, round_id: str):
 
     bid_res = api_list_auction_bids(round_id)
     bids = list(bid_res.get("rows", []) or [])
-    total = int(sum(int(x.get("amount", 0) or 0) for x in bids))
     participants = int(len(bids))
+    if not bids:
+        return {"ok": False, "error": "입찰 데이터가 없습니다."}
 
-    tre_memo = f"경매 {int(r.get('round_no', 0) or 0)}회 세입"
-    tre_res = api_add_treasury_tx(ADMIN_PIN, tre_memo, income=total, expense=0, actor="auction")
+    total = int(sum(int(x.get("amount", 0) or 0) for x in bids))
+
+    if refund_non_winners:
+        winner = bids[0]
+        winner_amount = int(winner.get("amount", 0) or 0)
+        winner_name = str(winner.get("student_name", "") or "")
+        
+        for bid in bids[1:]:
+            refund_amt = int(bid.get("amount", 0) or 0)
+            sid = str(bid.get("student_id", "") or "").strip()
+            if refund_amt <= 0 or not sid:
+                continue
+            s_ref = db.collection("students").document(sid)
+            s_snap = s_ref.get()
+            if not s_snap.exists:
+                continue
+            bal = int((s_snap.to_dict() or {}).get("balance", 0) or 0)
+            new_bal = int(bal + refund_amt)
+            s_ref.update({"balance": new_bal})
+            db.collection("transactions").document().set(
+                {
+                    "student_id": sid,
+                    "type": "deposit",
+                    "amount": int(refund_amt),
+                    "balance_after": int(new_bal),
+                    "memo": f"[경매 {int(r.get('round_no', 0) or 0):02d}회] 낙찰 실패 입찰금 반환",
+                    "created_at": firestore.SERVER_TIMESTAMP,
+                }
+            )
+
+        tre_total = int(max(winner_amount, 0))
+        tre_memo = (
+            f"경매 {int(r.get('round_no', 0) or 0)}회 세입(낙찰자만 반영: "
+            f"{winner_name} {winner_amount})"
+        )
+    else:
+        tre_total = int(total)
+        winner_amount = int(bids[0].get("amount", 0) or 0)
+        tre_memo = f"경매 {int(r.get('round_no', 0) or 0)}회 세입"
+
+    tre_res = api_add_treasury_tx(ADMIN_PIN, tre_memo, income=tre_total, expense=0, actor="auction")
     if not tre_res.get("ok"):
         return {"ok": False, "error": f"국고 반영 실패: {tre_res.get('error', 'unknown')}"}
 
@@ -3876,14 +3925,16 @@ def api_apply_auction_ledger(admin_pin: str, round_id: str):
             "bid_date": _fmt_auction_dt(r.get("opened_at")),
             "bid_name": str(r.get("bid_name", "") or ""),
             "participants": participants,
-            "total_amount": int(total),
+            "total_amount": int(tre_total),
+            "refund_non_winners": bool(refund_non_winners),
+            "winner_amount": int(winner_amount),
             "created_at": firestore.SERVER_TIMESTAMP,
         }
     )
 
     r_ref.set({"ledger_applied": True, "ledger_applied_at": firestore.SERVER_TIMESTAMP}, merge=True)
-    return {"ok": True, "total": int(total), "participants": participants}
-
+    return {"ok": True, "total": int(tre_total), "participants": participants}
+    
 def api_list_auction_admin_ledger(limit=100):
     q = db.collection("auction_admin_ledger").order_by("created_at", direction=firestore.Query.DESCENDING).limit(int(limit)).stream()
     rows = []
@@ -4367,6 +4418,75 @@ def api_submit_lottery_entries(name: str, pin: str, games: list[list[int]]):
         return {"ok": False, "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": f"복권 구매 실패: {e}"}
+
+def _generate_admin_lottery_numbers(game_count: int) -> list[list[int]]:
+    games = []
+    for _ in range(max(int(game_count), 0)):
+        nums = sorted(random.sample(range(1, 21), 4))
+        games.append(nums)
+    return games
+
+
+def api_submit_admin_lottery_entries(admin_pin: str, game_count: int):
+    if not is_admin_pin(admin_pin):
+        return {"ok": False, "error": "관리자 PIN이 틀립니다."}
+
+    count = int(game_count or 0)
+    if count <= 0:
+        return {"ok": False, "error": "복권 참여 수는 1 이상이어야 합니다."}
+
+    op = api_get_open_lottery_round()
+    if not op.get("ok"):
+        return {"ok": False, "error": "개시된 복권이 없습니다."}
+
+    rnd = op.get("round", {}) or {}
+    rid = str(rnd.get("round_id", "") or "")
+    round_no = int(rnd.get("round_no", 0) or 0)
+    price = int(rnd.get("ticket_price", 20) or 20)
+    if price <= 0:
+        return {"ok": False, "error": "복권 가격 설정이 올바르지 않습니다."}
+
+    numbers_games = _generate_admin_lottery_numbers(count)
+
+    round_ref = db.collection("lottery_rounds").document(rid)
+
+    @firestore.transactional
+    def _do(tx):
+        r_snap = round_ref.get(transaction=tx)
+        if not r_snap.exists:
+            raise ValueError("복권 회차를 찾지 못했습니다.")
+        r = r_snap.to_dict() or {}
+        if str(r.get("status", "")) != "open":
+            raise ValueError("마감된 복권은 구매할 수 없습니다.")
+
+        for nums in numbers_games:
+            entry_ref = db.collection("lottery_entries").document()
+            tx.set(
+                entry_ref,
+                {
+                    "round_id": rid,
+                    "round_no": int(round_no),
+                    "student_id": "",
+                    "student_no": 0,
+                    "student_name": ADMIN_NAME,
+                    "numbers": nums,
+                    "submitted_at": firestore.SERVER_TIMESTAMP,
+                    "ticket_price": int(price),
+                    "is_admin": True,
+                },
+            )
+
+    try:
+        _do(db.transaction())
+        api_list_lottery_entries.clear()
+        api_list_lottery_entries_by_student.clear()
+        api_get_open_lottery_round.clear()
+        return {"ok": True, "count": count, "numbers": numbers_games}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"관리자 복권 참여 실패: {e}"}
+        
 
 def api_draw_lottery(admin_pin: str, round_id: str, winning_numbers: list[int]):
     if not is_admin_pin(admin_pin):
@@ -12442,7 +12562,7 @@ if "🏷️ 경매" in tabs:
                         df_auc.to_excel(writer, index=False, sheet_name="경매결과")
                     xbuf.seek(0)
 
-                    d1, d2 = st.columns(2)
+                    d1, d2, d3 = st.columns([1, 1, 1])
                     with d1:
                         st.download_button(
                             "엑셀저장",
@@ -12453,9 +12573,11 @@ if "🏷️ 경매" in tabs:
                             key="auc_excel_download",
                         )
                     with d2:
+                        refund_non_winners = st.checkbox("낙찰금 반환", value=True, key="auc_refund_non_winners")
+                    with d3:
                         already = bool(cl_round.get("ledger_applied", False))
                         if st.button("장부반영", key="auc_apply_ledger_btn", use_container_width=True, disabled=already):
-                            res = api_apply_auction_ledger(ADMIN_PIN, cl_round_id)
+                            res = api_apply_auction_ledger(ADMIN_PIN, cl_round_id, refund_non_winners=refund_non_winners)
                             if res.get("ok"):
                                 toast("경매 관리장부 + 국고 세입 반영 완료", icon="✅")
                                 st.rerun()
@@ -12570,6 +12692,23 @@ if "🍀 복권" in tabs:
             else:
                 st.info("개시된 복권이 없습니다.")
 
+            st.markdown("### 👑 관리자 복권 참여")
+            if open_round:
+                ap1, ap2 = st.columns([2, 1])
+                with ap1:
+                    admin_lot_count = st.number_input("복권 참여 수", min_value=1, step=1, value=1, key="lot_admin_join_count")
+                with ap2:
+                    st.write("")
+                    if st.button("복권 참여", key="lot_admin_join_btn", use_container_width=True):
+                        ares = api_submit_admin_lottery_entries(ADMIN_PIN, int(admin_lot_count))
+                        if ares.get("ok"):
+                            toast(f"관리자 복권 {int(ares.get('count', 0) or 0)}게임 참여 완료", icon="✅")
+                            st.rerun()
+                        else:
+                            st.error(ares.get("error", "관리자 복권 참여 실패"))
+            else:
+                st.info("개시된 복권이 없습니다.")
+            
             current_round_id = str(open_round.get("round_id", "") or "")
             current_round = dict(open_round)
             if not current_round_id:
@@ -12588,6 +12727,27 @@ if "🍀 복권" in tabs:
                 ent_res = api_list_lottery_entries(current_round_id)
                 ent_rows = list(ent_res.get("rows", []) or [])
                 if ent_rows and str(current_round.get("status", "")) in ("closed", "drawn"):
+                    ticket_price = int(current_round.get("ticket_price", 0) or 0)
+                    participant_keys = set()
+                    for r in ent_rows:
+                        sid = str(r.get("student_id", "") or "").strip()
+                        if sid:
+                            participant_keys.add(f"sid:{sid}")
+                            continue
+                        sno = int(r.get("student_no", 0) or 0)
+                        sname = str(r.get("student_name", "") or "").strip()
+                        if sno > 0:
+                            participant_keys.add(f"sno:{sno}")
+                        elif sname:
+                            participant_keys.add(f"name:{sname}")
+
+                    summary_rows = [{
+                        "참여자수": int(len(participant_keys)),
+                        "참여 복권수": int(len(ent_rows)),
+                        "총 액수": int(len(ent_rows) * ticket_price),
+                    }]
+                    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
                     view_rows = [
                         {
                             "참여 일시": str(r.get("submitted_at_text", "") or ""),
@@ -12745,7 +12905,7 @@ if "🍀 복권" in tabs:
                         for ni in range(nums_per_game):
                             k = f"lot_in_{gi}_{ni}"
                             raw = row_cols[ni + 1].text_input(
-                                label="",
+                                label=f"{gi + 1}게임 {ni + 1}칸",
                                 key=k,
                                 placeholder="(숫자 입력칸)",
                                 label_visibility="collapsed",
