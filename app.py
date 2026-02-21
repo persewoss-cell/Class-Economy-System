@@ -4570,6 +4570,7 @@ def api_draw_lottery(admin_pin: str, round_id: str, winning_numbers: list[int]):
             "student_id": str(e.get("student_id", "") or ""),
             "student_no": int(e.get("student_no", 0) or 0),
             "student_name": str(e.get("student_name", "") or ""),
+            "is_admin": bool(e.get("is_admin", False)),
             "numbers": nums,
             "match_count": int(match),
             "submitted_at": e.get("submitted_at"),
@@ -4696,6 +4697,17 @@ def _calc_lottery_financials(round_row: dict) -> dict:
     total_sales = int(r.get("total_sales", 0) or 0)
 
     payout_total = int(sum(int(w.get("prize", 0) or 0) for w in winners))
+    admin_winning_total = int(
+        sum(
+            int(w.get("prize", 0) or 0)
+            for w in winners
+            if bool(w.get("is_admin", False))
+            or (
+                not str(w.get("student_id", "") or "").strip()
+                and str(w.get("student_name", "") or "").strip() == ADMIN_NAME
+            )
+        )
+    )
 
     tax_rate = int(r.get("tax_rate", 40) or 40)
     first_pct = int(r.get("first_pct", 80) or 80)
@@ -4718,6 +4730,7 @@ def _calc_lottery_financials(round_row: dict) -> dict:
         "payout_total": int(payout_total),
         "tax_total": int(tax_total),
         "national_amount": int(national_amount),
+        "admin_winning_total": int(admin_winning_total),
     }
 
 
@@ -4746,6 +4759,7 @@ def api_apply_lottery_ledger(admin_pin: str, round_id: str):
     payout_total = int(financials.get("payout_total", 0) or 0)
     tax_total = int(financials.get("tax_total", 0) or 0)
     national_amount = int(financials.get("national_amount", 0) or 0)
+    admin_winning_total = int(financials.get("admin_winning_total", 0) or 0)
     
     # 레거시 회차 보정: 참여자 수는 "복권 수"가 아닌 "실제 참여 학생 수"로 유지
     if participants <= 0:
@@ -4769,6 +4783,17 @@ def api_apply_lottery_ledger(admin_pin: str, round_id: str):
         if not tre_res.get("ok"):
             return {"ok": False, "error": f"국고 반영 실패: {tre_res.get('error', 'unknown')}"}
 
+    if admin_winning_total > 0:
+        admin_win_res = api_add_treasury_tx(
+            ADMIN_PIN,
+            f"복권 {round_no}회 관리자 당첨금 총액",
+            income=admin_winning_total,
+            expense=0,
+            actor="lottery_admin",
+        )
+        if not admin_win_res.get("ok"):
+            return {"ok": False, "error": f"관리자 당첨금 국고 반영 실패: {admin_win_res.get('error', 'unknown')}"}
+            
     db.collection("lottery_admin_ledger").document().set(
         {
             "round_id": rid,
@@ -4779,6 +4804,7 @@ def api_apply_lottery_ledger(admin_pin: str, round_id: str):
             "payout_total": int(payout_total),
             "tax_total": int(tax_total),
             "national_amount": int(national_amount),
+            "admin_winning_total": int(admin_winning_total),
             "drawn_at": r.get("drawn_at"),
             "created_at": firestore.SERVER_TIMESTAMP,
         }
@@ -4797,6 +4823,7 @@ def api_list_lottery_admin_ledger(limit=200):
         payout_total = int(x.get("payout_total", 0) or 0)
         tax_total = int(x.get("tax_total", 0) or 0)
         national_amount = int(x.get("national_amount", 0) or 0)
+        admin_winning_total = int(x.get("admin_winning_total", 0) or 0)
 
         if rid:
             r_snap = db.collection("lottery_rounds").document(rid).get()
@@ -4806,18 +4833,21 @@ def api_list_lottery_admin_ledger(limit=200):
                 payout_total = int(financials.get("payout_total", payout_total) or payout_total)
                 tax_total = int(financials.get("tax_total", tax_total) or tax_total)
                 national_amount = int(financials.get("national_amount", national_amount) or national_amount)
-
+                admin_winning_total = int(financials.get("admin_winning_total", admin_winning_total) or admin_winning_total)
+                
                 # 기존 장부 데이터가 잘못 저장된 경우 조회 시 자동 보정
                 if (
                     payout_total != int(x.get("payout_total", 0) or 0)
                     or tax_total != int(x.get("tax_total", 0) or 0)
                     or national_amount != int(x.get("national_amount", 0) or 0)
+                    or admin_winning_total != int(x.get("admin_winning_total", 0) or 0)
                 ):
                     d.reference.set(
                         {
                             "payout_total": int(payout_total),
                             "tax_total": int(tax_total),
                             "national_amount": int(national_amount),
+                            "admin_winning_total": int(admin_winning_total),
                             "updated_at": firestore.SERVER_TIMESTAMP,
                         },
                         merge=True,
@@ -12767,7 +12797,7 @@ if "🍀 복권" in tabs:
                 join_summary = st.session_state.get("lot_admin_join_summary") or {}
                 if join_summary:
                     st.caption(
-                        "복권 참여 현황 | "
+                        "관리자 참여 현황 : "
                         f"복권 참여수 {int(join_summary.get('count', 0) or 0):02d}  |  "
                         f"총액 {int(join_summary.get('total_cost', 0) or 0)}  |  "
                         f"국고반영여부 {'O' if bool(join_summary.get('treasury_applied', False)) else 'X'}"
@@ -12825,9 +12855,9 @@ if "🍀 복권" in tabs:
                     ]
                     st.dataframe(pd.DataFrame(view_rows), use_container_width=True, hide_index=True)
                 else:
-                    st.info("개시된 복권이 없습니다.")
+                    st.info("복권 마감 버튼을 누르면 참여결과가 나타납니다.")
             else:
-                st.info("개시된 복권이 없습니다.")
+                st.info("복권 마감 버튼을 누르면 참여결과가 나타납니다.")
 
             st.markdown("### 🎰 복권 추첨하기")
             d1, d2, d3, d4 = st.columns(4)
@@ -12863,10 +12893,14 @@ if "🍀 복권" in tabs:
                 r_dat = r_snap.to_dict() if r_snap.exists else {}
                 winners = list((r_dat or {}).get("winners", []) or [])
                 win_nums = _normalize_lottery_numbers((r_dat or {}).get("winning_numbers", []))
+                draw_submitted = str((r_dat or {}).get("status", "") or "") == "drawn"
 
-                if winners:
+                if draw_submitted:
                     st.caption(f"회차 {int((r_dat or {}).get('round_no', 0) or 0)} | 당첨번호: {', '.join([f'{n:02d}' for n in win_nums])}")
-
+                else:
+                    st.info("복권 추첨 후 당첨자 확인이 가능합니다.")
+                
+                if winners:
                     def _render_nums(nums, wset):
                         out = []
                         for n in nums:
@@ -12893,6 +12927,11 @@ if "🍀 복권" in tabs:
                     html.append("</tbody></table>")
                     st.markdown("".join(html), unsafe_allow_html=True)
 
+                else:
+                    if draw_submitted:
+                        st.info("당첨자가 없습니다.")
+
+                if draw_submitted:
                     payout_done = bool((r_dat or {}).get("payout_done", False))
                     led_done = bool((r_dat or {}).get("ledger_applied", False))
                     action_done = payout_done and led_done
@@ -12924,8 +12963,6 @@ if "🍀 복권" in tabs:
                         st.caption("당첨금 지급: 완료")
                     if led_done:
                         st.caption("장부 반영: 완료")
-                else:
-                    st.info("당첨자가 없습니다.")
 
             st.markdown("### 📒 복권 관리 장부")
             led_res = api_list_lottery_admin_ledger(limit=200)
@@ -13051,7 +13088,7 @@ if "🍀 복권" in tabs:
                 if hist_rows:
                     st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
                 else:
-                    st.info("아직 복권 구매 내역이 없습니다.")
+                    st.info("복권 구매 내역이 없습니다.")
                     
 # =========================
 # 📊 통계/신용 (학생 전용 · 읽기 전용)
@@ -13470,3 +13507,4 @@ if "🎯 목표" in tabs and (not is_admin):
 
         if principal_all_running == 0 and interest_before_goal == 0:
             st.caption("진행 중 적금이 없어 예상 금액은 통장 잔액과 같아요.")
+            
