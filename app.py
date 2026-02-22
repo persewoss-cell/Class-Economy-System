@@ -4228,6 +4228,8 @@ def api_list_lottery_entries(round_id: str):
                     "numbers_text": ", ".join([f"{n:02d}" for n in nums]),
                     "submitted_at": x.get("submitted_at"),
                     "submitted_at_text": _fmt_lottery_dt(x.get("submitted_at")),
+                    "is_admin": bool(x.get("is_admin", False)),
+                    "treasury_applied": bool(x.get("treasury_applied", False)),
                 }
             )
         return out
@@ -4536,6 +4538,7 @@ def api_submit_admin_lottery_entries(admin_pin: str, game_count: int, apply_trea
                     "submitted_at": firestore.SERVER_TIMESTAMP,
                     "ticket_price": int(price),
                     "is_admin": True,
+                    "treasury_applied": bool(apply_treasury),
                 },
             )
 
@@ -12833,24 +12836,46 @@ if "🍀 복권" in tabs:
                             apply_treasury=bool(lot_apply_treasury),
                         )
                         if ares.get("ok"):
-                            st.session_state["lot_admin_join_summary"] = {
-                                "count": int(ares.get("count", 0) or 0),
-                                "total_cost": int(ares.get("total_cost", 0) or 0),
-                                "treasury_applied": bool(ares.get("treasury_applied", False)),
-                            }
                             toast(f"관리자 복권 {int(ares.get('count', 0) or 0)}게임 참여 완료", icon="✅")
                             st.rerun()
                         else:
                             st.error(ares.get("error", "관리자 복권 참여 실패"))
 
-                join_summary = st.session_state.get("lot_admin_join_summary") or {}
-                if join_summary:
+                current_round_entries = api_list_lottery_entries(str(open_round.get("round_id", "") or "")).get("rows", [])
+                ticket_price = int(open_round.get("ticket_price", 0) or 0)
+                admin_with_treasury_count = 0
+                admin_without_treasury_count = 0
+                student_count = 0
+                for row in current_round_entries:
+                    is_admin_entry = bool(row.get("is_admin", False))
+                    if is_admin_entry:
+                        if bool(row.get("treasury_applied", False)):
+                            admin_with_treasury_count += 1
+                        else:
+                            admin_without_treasury_count += 1
+                    else:
+                        student_count += 1
+
+                if admin_with_treasury_count > 0:
                     st.caption(
                         "관리자 참여 현황 : "
-                        f"복권 참여수 {int(join_summary.get('count', 0) or 0):02d}  |  "
-                        f"총액 {int(join_summary.get('total_cost', 0) or 0)}  |  "
-                        f"국고반영여부 {'O' if bool(join_summary.get('treasury_applied', False)) else 'X'}"
+                        f"복권 참여수 {int(admin_with_treasury_count):02d}  |  "
+                        f"총액 {int(admin_with_treasury_count * ticket_price)}  |  "
+                        "국고반영여부 O"
                     )
+                if admin_without_treasury_count > 0:
+                    st.caption(
+                        "관리자 참여 현황 : "
+                        f"복권 참여수 {int(admin_without_treasury_count):02d}  |  "
+                        f"총액 {int(admin_without_treasury_count * ticket_price)}  |  "
+                        "국고반영여부 X"
+                    )
+
+                st.caption(
+                    "학생 참여 현황 : "
+                    f"복권 참여수 {int(student_count):02d}  |  "
+                    f"총액 {int(student_count * ticket_price):03d}"
+                )
             else:
                 st.info("개시된 복권이 없습니다.")
             
