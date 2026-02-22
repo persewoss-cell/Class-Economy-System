@@ -881,11 +881,8 @@ def _get_invest_summary_by_student_id(student_id: str) -> tuple[str, int]:
 
             pname, cur_price = prod_map.get(pid, (pid, 0.0))
 
-            # 현재가치(대략): 투자금 * (현재가/매수가)
-            if buy_price > 0 and cur_price > 0:
-                cur_val = invest_amount * (cur_price / buy_price)
-            else:
-                cur_val = invest_amount
+            # 현재 평가금은 투자 회수(지급) 계산과 동일 규칙 사용
+            _, _, cur_val = _calc_invest_redeem_projection(invest_amount, buy_price, cur_price)
 
             per_prod_val[pid] = per_prod_val.get(pid, 0) + cur_val
 
@@ -909,6 +906,29 @@ def _get_invest_summary_by_student_id(student_id: str) -> tuple[str, int]:
     except Exception:
         return ("없음", 0)
 
+
+def _calc_invest_redeem_projection(invest_amount: int, buy_price: float, sell_price: float):
+    """
+    투자 회수(지급)와 동일한 기준으로 현재 평가/예상 회수금 계산.
+    return: (등락폭, 수익/손실, 회수예상금[int])
+    """
+    invest_amount = int(invest_amount or 0)
+    buy_price = _as_price1(buy_price)
+    sell_price = _as_price1(sell_price)
+    diff = _as_price1(sell_price - buy_price)
+
+    # diff <= -100 : 전액 손실
+    if diff <= -100:
+        profit = -invest_amount
+        redeem_amt = 0
+    else:
+        profit = invest_amount * float(diff) / 10.0
+        redeem_amt = invest_amount + profit
+        if redeem_amt < 0:
+            redeem_amt = 0
+
+    return diff, profit, int(round(redeem_amt))
+    
 
 @st.cache_data(ttl=30, show_spinner=False)
 def _get_invest_principal_by_student_id(student_id: str) -> tuple[str, int]:
@@ -7637,22 +7657,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     # 회수 계산(÷10)
     # -------------------------
     def _calc_redeem_amount(invest_amount: int, buy_price: float, sell_price: float):
-        invest_amount = int(invest_amount or 0)
-        buy_price = _as_price1(buy_price)
-        sell_price = _as_price1(sell_price)
-        diff = _as_price1(sell_price - buy_price)
-    
-        # diff <= -100 : 전액 손실
-        if diff <= -100:
-            profit = -invest_amount
-            redeem_amt = 0
-        else:
-            profit = invest_amount * float(diff) / 10.0  # ✅ 나누기 10
-            redeem_amt = invest_amount + profit
-            if redeem_amt < 0:
-                redeem_amt = 0
-    
-        return diff, profit, int(round(redeem_amt))
+        return _calc_invest_redeem_projection(invest_amount, buy_price, sell_price)
     
     # -------------------------------------------------
     # 1) (상단) 종목 및 주가 변동
@@ -7713,11 +7718,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                 buy_price = float(r.get("buy_price", 0.0) or 0.0)
                 cur_price = float(price_by_id.get(pid, 0.0) or 0.0)
 
-                # ✅ 현재 평가(거래 탭 기준): 투자금 * (현재가/매입가)
-                if buy_price > 0 and cur_price > 0:
-                    cur_val = amt * (cur_price / buy_price)
-                else:
-                    cur_val = amt
+                # ✅ 현재 평가는 투자 회수(지급) 계산과 동일 규칙 적용
+                _, _, cur_val = _calc_invest_redeem_projection(amt, buy_price, cur_price)
 
                 _add_sum(principal_by_name, nm, amt)
                 _add_sum(eval_by_name, nm, int(round(cur_val)))
