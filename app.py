@@ -12638,8 +12638,28 @@ if "🏷️ 경매" in tabs:
                             f"입찰이름: {str(cl_round.get('bid_name', '') or '')}"
                         )
                         d1, d2, d3 = st.columns([1, 1, 1])
+                        
+                        def _auc_toggle_no_refund():
+                            if st.session_state.get("auc_refund_non_winners_no", False):
+                                st.session_state["auc_refund_non_winners_yes"] = False
+
+                        def _auc_toggle_yes_refund():
+                            if st.session_state.get("auc_refund_non_winners_yes", False):
+                                st.session_state["auc_refund_non_winners_no"] = False
+
                         with d2:
-                            refund_non_winners = st.checkbox("낙찰금 반환(반환액 90%)", value=True, key="auc_refund_non_winners")
+                            no_refund_checked = st.checkbox(
+                                "낙찰금 미반환",
+                                value=bool(st.session_state.get("auc_refund_non_winners_no", False)),
+                                key="auc_refund_non_winners_no",
+                                on_change=_auc_toggle_no_refund,
+                            )
+                            yes_refund_checked = st.checkbox(
+                                "낙찰금 반환(반환액 90%)",
+                                value=bool(st.session_state.get("auc_refund_non_winners_yes", False)),
+                                key="auc_refund_non_winners_yes",
+                                on_change=_auc_toggle_yes_refund,
+                            )
                         with d3:
                             already = bool(cl_round.get("ledger_applied", False))
                             apply_clicked = st.button("장부반영", key="auc_apply_ledger_btn", use_container_width=True, disabled=already)
@@ -12668,13 +12688,17 @@ if "🏷️ 경매" in tabs:
                             st.info("제출된 입찰표가 없습니다.")
                             
                         if apply_clicked:
-                            res = api_apply_auction_ledger(ADMIN_PIN, cl_round_id, refund_non_winners=refund_non_winners)
-                            if res.get("ok"):
-                                toast("경매 관리장부 + 국고 세입 반영 완료", icon="✅")
-                                st.rerun()
+                            if (not no_refund_checked) and (not yes_refund_checked):
+                                st.warning("낙찰금 반환 여부를 선택 후 장부 반영 버튼을 눌러 주세요")
                             else:
-                                st.error(res.get("error", "장부 반영 실패"))
-                            
+                                refund_non_winners = bool(yes_refund_checked)
+                                res = api_apply_auction_ledger(ADMIN_PIN, cl_round_id, refund_non_winners=refund_non_winners)
+                                if res.get("ok"):
+                                    toast("경매 관리장부 + 국고 세입 반영 완료", icon="✅")
+                                    st.rerun()
+                                else:
+                                    st.error(res.get("error", "장부 반영 실패"))
+                                    
             st.markdown("### 📚 경매 관리 장부")
             led = api_list_auction_admin_ledger(limit=100)
             led_rows = list(led.get("rows", []) or [])
