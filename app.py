@@ -12827,10 +12827,18 @@ if "🍀 복권" in tabs:
                     current_round_id = ""
 
             st.markdown("### 📝 복권 참여 결과")
+            lot_result_gate_msg = "경매 마감 버튼을 눌러야 경매 결과가 표시됩니다."
             if current_round_id:
                 ent_res = api_list_lottery_entries(current_round_id)
                 ent_rows = list(ent_res.get("rows", []) or [])
-                if ent_rows and str(current_round.get("status", "")) in ("closed", "drawn"):
+                is_lottery_closed = str(current_round.get("status", "")) in ("closed", "drawn")
+                payout_done = bool(current_round.get("payout_done", False))
+
+                # 복권 참여 결과는 "복권 마감" 이후에만 보이고,
+                # 당첨금 지급/장부 반영 완료 후에는 다시 안내 문구로 전환.
+                show_entry_result = bool(ent_rows) and is_lottery_closed and (not payout_done)
+
+                if show_entry_result:
                     ticket_price = int(current_round.get("ticket_price", 0) or 0)
                     participant_keys = set()
                     for r in ent_rows:
@@ -12863,10 +12871,10 @@ if "🍀 복권" in tabs:
                     ]
                     st.dataframe(pd.DataFrame(view_rows), use_container_width=True, hide_index=True)
                 else:
-                    st.info("복권 마감 버튼을 누르면 참여결과가 나타납니다.")
+                    st.info(lot_result_gate_msg)
             else:
-                st.info("복권 마감 버튼을 누르면 참여결과가 나타납니다.")
-
+                st.info(lot_result_gate_msg)
+                
             st.markdown("### 🎰 복권 추첨하기")
             d1, d2, d3, d4 = st.columns(4)
             with d1:
