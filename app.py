@@ -3922,9 +3922,10 @@ def api_apply_auction_ledger(admin_pin: str, round_id: str, refund_non_winners: 
             winner_amount = int(bids[0].get("amount", 0) or 0)
         tre_memo = f"경매 {int(r.get('round_no', 0) or 0)}회 세입"
 
-    tre_res = api_add_treasury_tx(ADMIN_PIN, tre_memo, income=tre_total, expense=0, actor="auction")
-    if not tre_res.get("ok"):
-        return {"ok": False, "error": f"국고 반영 실패: {tre_res.get('error', 'unknown')}"}
+    if tre_total > 0:
+        tre_res = api_add_treasury_tx(ADMIN_PIN, tre_memo, income=tre_total, expense=0, actor="auction")
+        if not tre_res.get("ok"):
+            return {"ok": False, "error": f"국고 반영 실패: {tre_res.get('error', 'unknown')}"}
 
     if refund_non_winners and fee_total > 0:
         fee_res = api_add_treasury_tx(
@@ -3974,7 +3975,7 @@ def api_list_auction_admin_ledger(limit=100):
                 "입찰 참가수": int(x.get("participants", 0) or 0),
                 "입찰금 총액": settled_bid_amount,
                 "낙찰금 수수료 총액": int(x.get("fee_amount", 0) or 0),
-                "국고 반영 총액": int(x.get("total_amount", 0) or 0),
+                "국고 반영 총액": "-" if int(x.get("total_amount", 0) or 0) == 0 else int(x.get("total_amount", 0) or 0),
             }
         )
     return {"ok": True, "rows": rows}
@@ -12684,6 +12685,7 @@ if "🏷️ 경매" in tabs:
 
         else:
             st.markdown("### 📝 입찰표")
+            st.markdown("### ✋경매 참여하기")
             if not open_round:
                 st.info("개시된 경매가 없습니다.")
             else:
@@ -12697,8 +12699,6 @@ if "🏷️ 경매" in tabs:
                 st.write(f"- 입찰번호: {int(open_round.get('round_no', 0) or 0):02d}")
                 st.write(f"- 입찰이름: {str(open_round.get('bid_name', '') or '')}")
                 st.write(f"- 입찰자 정보: 번호 {my_no_v} / 이름 {my_name_v} / 소속 {str(open_round.get('affiliation', '') or '')}")
-
-                st.markdown("### ✋경매 참여하기")
 
                 bid_doc_id = f"{str(open_round.get('round_id', '') or '')}_{sid}"
                 prev_bid = db.collection("auction_bids").document(bid_doc_id).get() if sid else None
