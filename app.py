@@ -12637,7 +12637,6 @@ if "🏷️ 경매" in tabs:
                             f"최근 마감 경매: {int(cl_round.get('round_no', 0) or 0):02d}회 | "
                             f"입찰이름: {str(cl_round.get('bid_name', '') or '')}"
                         )
-                        d1, d2, d3 = st.columns([1, 1, 1])
                         
                         def _auc_toggle_no_refund():
                             if st.session_state.get("auc_refund_non_winners_no", False):
@@ -12646,26 +12645,9 @@ if "🏷️ 경매" in tabs:
                         def _auc_toggle_yes_refund():
                             if st.session_state.get("auc_refund_non_winners_yes", False):
                                 st.session_state["auc_refund_non_winners_no"] = False
-
-                        with d2:
-                            no_refund_checked = st.checkbox(
-                                "낙찰금 미반환",
-                                value=bool(st.session_state.get("auc_refund_non_winners_no", False)),
-                                key="auc_refund_non_winners_no",
-                                on_change=_auc_toggle_no_refund,
-                            )
-                            yes_refund_checked = st.checkbox(
-                                "낙찰금 반환(반환액 90%)",
-                                value=bool(st.session_state.get("auc_refund_non_winners_yes", False)),
-                                key="auc_refund_non_winners_yes",
-                                on_change=_auc_toggle_yes_refund,
-                            )
-                        with d3:
-                            already = bool(cl_round.get("ledger_applied", False))
-                            apply_clicked = st.button("장부반영", key="auc_apply_ledger_btn", use_container_width=True, disabled=already)
-                            if already:
-                                st.caption("이미 장부 반영된 경매입니다.")
-                                
+                        already = bool(cl_round.get("ledger_applied", False))
+                        apply_clicked = False
+                             
                         if view_rows:
                             df_auc = pd.DataFrame(view_rows)
                             st.dataframe(df_auc, use_container_width=True, hide_index=True)
@@ -12675,7 +12657,8 @@ if "🏷️ 경매" in tabs:
                                 df_auc.to_excel(writer, index=False, sheet_name="경매결과")
                             xbuf.seek(0)
 
-                            with d1:
+                            ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([1.2, 0.9, 1.2, 1.2])
+                            with ctrl1:
                                 st.download_button(
                                     "엑셀저장",
                                     data=xbuf.getvalue(),
@@ -12684,8 +12667,27 @@ if "🏷️ 경매" in tabs:
                                     use_container_width=True,
                                     key="auc_excel_download",
                                 )
+                            with ctrl2:
+                                no_refund_checked = st.checkbox(
+                                    "낙찰금 미반환",
+                                    value=bool(st.session_state.get("auc_refund_non_winners_no", False)),
+                                    key="auc_refund_non_winners_no",
+                                    on_change=_auc_toggle_no_refund,
+                                )
+                            with ctrl3:
+                                yes_refund_checked = st.checkbox(
+                                    "낙찰금 반환(반환액 90%)",
+                                    value=bool(st.session_state.get("auc_refund_non_winners_yes", False)),
+                                    key="auc_refund_non_winners_yes",
+                                    on_change=_auc_toggle_yes_refund,
+                                )
+                            with ctrl4:
+                                apply_clicked = st.button("장부반영", key="auc_apply_ledger_btn", use_container_width=True, disabled=already)
                         else:
                             st.info("제출된 입찰표가 없습니다.")
+
+                        if already:
+                            st.caption("이미 장부 반영된 경매입니다.")
                             
                         if apply_clicked:
                             if (not no_refund_checked) and (not yes_refund_checked):
