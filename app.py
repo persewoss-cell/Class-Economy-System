@@ -12827,7 +12827,7 @@ if "🍀 복권" in tabs:
                     current_round_id = ""
 
             st.markdown("### 📝 복권 참여 결과")
-            lot_result_gate_msg = "경매 마감 버튼을 눌러야 경매 결과가 표시됩니다."
+            lot_result_gate_msg = "복권 마감 버튼을 눌러야 결과가 표시됩니다."
             if current_round_id:
                 ent_res = api_list_lottery_entries(current_round_id)
                 ent_rows = list(ent_res.get("rows", []) or [])
