@@ -12898,6 +12898,7 @@ if "🍀 복권" in tabs:
                 else:
                     res = api_draw_lottery(ADMIN_PIN, current_round_id, draw_nums)
                     if res.get("ok"):
+                        st.session_state["lottery_winners_visible_round_id"] = str(current_round_id)
                         toast("복권 추첨 완료", icon="✅")
                         st.rerun()
                     else:
@@ -12905,18 +12906,22 @@ if "🍀 복권" in tabs:
 
             st.markdown("### 🎉 당첨자 확인")
             if current_round_id:
+                current_round_id_str = str(current_round_id)
+                submitted_round_id = str(st.session_state.get("lottery_winners_visible_round_id", "") or "")
+                show_winner_result = submitted_round_id == current_round_id_st
+                
                 r_snap = db.collection("lottery_rounds").document(current_round_id).get()
                 r_dat = r_snap.to_dict() if r_snap.exists else {}
                 winners = list((r_dat or {}).get("winners", []) or [])
                 win_nums = _normalize_lottery_numbers((r_dat or {}).get("winning_numbers", []))
                 draw_submitted = str((r_dat or {}).get("status", "") or "") == "drawn"
 
-                if draw_submitted:
+                if show_winner_result and draw_submitted:
                     st.caption(f"회차 {int((r_dat or {}).get('round_no', 0) or 0)} | 당첨번호: {', '.join([f'{n:02d}' for n in win_nums])}")
                 else:
-                    st.info("복권 추첨 후 당첨자 확인이 가능합니다.")
-                
-                if winners:
+                    st.info("당첨 번호 제출 버튼을 눌러야 당첨 결과가 표시됩니다.")
+                    
+                if show_winner_result and winners:
                     def _render_nums(nums, wset):
                         out = []
                         for n in nums:
@@ -12944,10 +12949,10 @@ if "🍀 복권" in tabs:
                     st.markdown("".join(html), unsafe_allow_html=True)
 
                 else:
-                    if draw_submitted:
+                    if show_winner_result and draw_submitted:
                         st.info("당첨자가 없습니다.")
 
-                if draw_submitted:
+                if show_winner_result and draw_submitted:
                     payout_done = bool((r_dat or {}).get("payout_done", False))
                     led_done = bool((r_dat or {}).get("ledger_applied", False))
                     action_done = payout_done and led_done
@@ -12972,6 +12977,7 @@ if "🍀 복권" in tabs:
                                 finalize_ok = False
 
                         if finalize_ok:
+                            st.session_state["lottery_winners_visible_round_id"] = ""
                             toast("당첨금 지급 및 장부 반영 완료", icon="✅")
                             st.rerun()
 
