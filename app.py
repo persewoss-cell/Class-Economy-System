@@ -3871,13 +3871,12 @@ def api_apply_auction_ledger(admin_pin: str, round_id: str, refund_non_winners: 
     bid_res = api_list_auction_bids(round_id)
     bids = list(bid_res.get("rows", []) or [])
     participants = int(len(bids))
-    if not bids:
-        return {"ok": False, "error": "입찰 데이터가 없습니다."}
 
     total = int(sum(int(x.get("amount", 0) or 0) for x in bids))
     fee_total = 0
+    winner_amount = 0
 
-    if refund_non_winners:
+    if refund_non_winners and bids:
         winner = bids[0]
         winner_amount = int(winner.get("amount", 0) or 0)
         winner_name = str(winner.get("student_name", "") or "")
@@ -3919,7 +3918,8 @@ def api_apply_auction_ledger(admin_pin: str, round_id: str, refund_non_winners: 
         )
     else:
         tre_total = int(total)
-        winner_amount = int(bids[0].get("amount", 0) or 0)
+        if bids:
+            winner_amount = int(bids[0].get("amount", 0) or 0)
         tre_memo = f"경매 {int(r.get('round_no', 0) or 0)}회 세입"
 
     tre_res = api_add_treasury_tx(ADMIN_PIN, tre_memo, income=tre_total, expense=0, actor="auction")
@@ -12636,6 +12636,15 @@ if "🏷️ 경매" in tabs:
                             f"최근 마감 경매: {int(cl_round.get('round_no', 0) or 0):02d}회 | "
                             f"입찰이름: {str(cl_round.get('bid_name', '') or '')}"
                         )
+                        d1, d2, d3 = st.columns([1, 1, 1])
+                        with d2:
+                            refund_non_winners = st.checkbox("낙찰금 반환(반환액 90%)", value=True, key="auc_refund_non_winners")
+                        with d3:
+                            already = bool(cl_round.get("ledger_applied", False))
+                            apply_clicked = st.button("장부반영", key="auc_apply_ledger_btn", use_container_width=True, disabled=already)
+                            if already:
+                                st.caption("이미 장부 반영된 경매입니다.")
+                                
                         if view_rows:
                             df_auc = pd.DataFrame(view_rows)
                             st.dataframe(df_auc, use_container_width=True, hide_index=True)
@@ -12645,7 +12654,6 @@ if "🏷️ 경매" in tabs:
                                 df_auc.to_excel(writer, index=False, sheet_name="경매결과")
                             xbuf.seek(0)
 
-                            d1, d2, d3 = st.columns([1, 1, 1])
                             with d1:
                                 st.download_button(
                                     "엑셀저장",
@@ -12655,21 +12663,16 @@ if "🏷️ 경매" in tabs:
                                     use_container_width=True,
                                     key="auc_excel_download",
                                 )
-                            with d2:
-                                refund_non_winners = st.checkbox("낙찰금 반환(반환액 90%)", value=True, key="auc_refund_non_winners")
-                            with d3:
-                                already = bool(cl_round.get("ledger_applied", False))
-                                if st.button("장부반영", key="auc_apply_ledger_btn", use_container_width=True, disabled=already):
-                                    res = api_apply_auction_ledger(ADMIN_PIN, cl_round_id, refund_non_winners=refund_non_winners)
-                                    if res.get("ok"):
-                                        toast("경매 관리장부 + 국고 세입 반영 완료", icon="✅")
-                                        st.rerun()
-                                    else:
-                                        st.error(res.get("error", "장부 반영 실패"))
-                                if already:
-                                    st.caption("이미 장부 반영된 경매입니다.")
                         else:
                             st.info("제출된 입찰표가 없습니다.")
+                            
+                        if apply_clicked:
+                            res = api_apply_auction_ledger(ADMIN_PIN, cl_round_id, refund_non_winners=refund_non_winners)
+                            if res.get("ok"):
+                                toast("경매 관리장부 + 국고 세입 반영 완료", icon="✅")
+                                st.rerun()
+                            else:
+                                st.error(res.get("error", "장부 반영 실패"))
                             
             st.markdown("### 📚 경매 관리 장부")
             led = api_list_auction_admin_ledger(limit=100)
@@ -12680,6 +12683,7 @@ if "🏷️ 경매" in tabs:
                 st.info("아직 반영된 경매 관리 장부가 없습니다.")
 
         else:
+            st.markdown("### 📝 입찰표")
             if not open_round:
                 st.info("개시된 경매가 없습니다.")
             else:
@@ -12689,11 +12693,12 @@ if "🏷️ 경매" in tabs:
                 my_no_v = int((me or {}).get("no", 0) or 0)
                 my_name_v = str((me or {}).get("name", login_name) or login_name)
 
-                st.markdown("### 📝 입찰표")
                 st.write(f"- 입찰기일: {_fmt_auction_dt(open_round.get('opened_at'))}")
                 st.write(f"- 입찰번호: {int(open_round.get('round_no', 0) or 0):02d}")
                 st.write(f"- 입찰이름: {str(open_round.get('bid_name', '') or '')}")
                 st.write(f"- 입찰자 정보: 번호 {my_no_v} / 이름 {my_name_v} / 소속 {str(open_round.get('affiliation', '') or '')}")
+
+                st.markdown("### ✋경매 참여하기")
 
                 bid_doc_id = f"{str(open_round.get('round_id', '') or '')}_{sid}"
                 prev_bid = db.collection("auction_bids").document(bid_doc_id).get() if sid else None
