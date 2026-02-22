@@ -13515,4 +13515,3 @@ if "🎯 목표" in tabs and (not is_admin):
 
         if principal_all_running == 0 and interest_before_goal == 0:
             st.caption("진행 중 적금이 없어 예상 금액은 통장 잔액과 같아요.")
-            
