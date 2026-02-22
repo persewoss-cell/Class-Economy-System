@@ -3972,9 +3972,9 @@ def api_list_auction_admin_ledger(limit=100):
                 "입찰기일": str(x.get("bid_date", "") or ""),
                 "입찰 내역": str(x.get("bid_name", "") or ""),
                 "입찰 참가수": int(x.get("participants", 0) or 0),
-                "낙찰금": settled_bid_amount,
+                "입찰금 총액": settled_bid_amount,
                 "낙찰금 수수료 총액": int(x.get("fee_amount", 0) or 0),
-                "총 액수": int(x.get("total_amount", 0) or 0),
+                "국고 반영 총액": int(x.get("total_amount", 0) or 0),
             }
         )
     return {"ok": True, "rows": rows}
@@ -12604,65 +12604,73 @@ if "🏷️ 경매" in tabs:
 
             st.markdown("### 📊 경매 결과")
 
-            closed_res = api_get_latest_closed_auction_round()
-            if not closed_res.get("ok"):
-                st.info("개시된 경매가 없습니다.")
+            # ✅ 경매 결과는 '진행 중 경매가 없을 때(=마감 후)'에만 노출
+            if open_round:
+                st.info("경매 마감 버튼을 눌러야 경매 결과가 표시됩니다.")
             else:
-                cl_round = closed_res.get("round", {}) or {}
-                cl_round_id = str(cl_round.get("round_id", "") or "")
-
-                bid_res = api_list_auction_bids(cl_round_id)
-                bid_rows = list(bid_res.get("rows", []) or [])
-                view_rows = []
-                for r in bid_rows:
-                    view_rows.append(
-                        {
-                            "입찰 가격": int(r.get("amount", 0) or 0),
-                            "입찰일시": str(r.get("submitted_at_text", "") or ""),
-                            "번호": int(r.get("student_no", 0) or 0),
-                            "이름": str(r.get("student_name", "") or ""),
-                        }
-                    )
-
-                st.caption(
-                    f"최근 마감 경매: {int(cl_round.get('round_no', 0) or 0):02d}회 | "
-                    f"입찰이름: {str(cl_round.get('bid_name', '') or '')}"
-                )
-                if view_rows:
-                    df_auc = pd.DataFrame(view_rows)
-                    st.dataframe(df_auc, use_container_width=True, hide_index=True)
-
-                    xbuf = BytesIO()
-                    with pd.ExcelWriter(xbuf, engine="openpyxl") as writer:
-                        df_auc.to_excel(writer, index=False, sheet_name="경매결과")
-                    xbuf.seek(0)
-
-                    d1, d2, d3 = st.columns([1, 1, 1])
-                    with d1:
-                        st.download_button(
-                            "엑셀저장",
-                            data=xbuf.getvalue(),
-                            file_name=f"auction_result_{int(cl_round.get('round_no', 0) or 0):02d}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
-                            key="auc_excel_download",
-                        )
-                    with d2:
-                        refund_non_winners = st.checkbox("낙찰금 반환(반환액 90%)", value=True, key="auc_refund_non_winners")
-                    with d3:
-                        already = bool(cl_round.get("ledger_applied", False))
-                        if st.button("장부반영", key="auc_apply_ledger_btn", use_container_width=True, disabled=already):
-                            res = api_apply_auction_ledger(ADMIN_PIN, cl_round_id, refund_non_winners=refund_non_winners)
-                            if res.get("ok"):
-                                toast("경매 관리장부 + 국고 세입 반영 완료", icon="✅")
-                                st.rerun()
-                            else:
-                                st.error(res.get("error", "장부 반영 실패"))
-                        if already:
-                            st.caption("이미 장부 반영된 경매입니다.")
+                closed_res = api_get_latest_closed_auction_round()
+                if not closed_res.get("ok"):
+                    st.info("마감된 경매가 없습니다.")
                 else:
-                    st.info("제출된 입찰표가 없습니다.")
+                    cl_round = closed_res.get("round", {}) or {}
+                    cl_round_id = str(cl_round.get("round_id", "") or "")
 
+                    # 장부 반영이 완료된 경매는 결과 표를 숨기고 기본 안내 문구를 유지
+                    if bool(cl_round.get("ledger_applied", False)):
+                        st.info("경매 마감 버튼을 눌러야 경매 결과가 표시됩니다.")
+                    else:
+                        bid_res = api_list_auction_bids(cl_round_id)
+                        bid_rows = list(bid_res.get("rows", []) or [])
+                        view_rows = []
+                        for r in bid_rows:
+                            view_rows.append(
+                                {
+                                    "입찰 가격": int(r.get("amount", 0) or 0),
+                                    "입찰일시": str(r.get("submitted_at_text", "") or ""),
+                                    "번호": int(r.get("student_no", 0) or 0),
+                                    "이름": str(r.get("student_name", "") or ""),
+                                }
+                            )
+
+                        st.caption(
+                            f"최근 마감 경매: {int(cl_round.get('round_no', 0) or 0):02d}회 | "
+                            f"입찰이름: {str(cl_round.get('bid_name', '') or '')}"
+                        )
+                        if view_rows:
+                            df_auc = pd.DataFrame(view_rows)
+                            st.dataframe(df_auc, use_container_width=True, hide_index=True)
+
+                            xbuf = BytesIO()
+                            with pd.ExcelWriter(xbuf, engine="openpyxl") as writer:
+                                df_auc.to_excel(writer, index=False, sheet_name="경매결과")
+                            xbuf.seek(0)
+
+                            d1, d2, d3 = st.columns([1, 1, 1])
+                            with d1:
+                                st.download_button(
+                                    "엑셀저장",
+                                    data=xbuf.getvalue(),
+                                    file_name=f"auction_result_{int(cl_round.get('round_no', 0) or 0):02d}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True,
+                                    key="auc_excel_download",
+                                )
+                            with d2:
+                                refund_non_winners = st.checkbox("낙찰금 반환(반환액 90%)", value=True, key="auc_refund_non_winners")
+                            with d3:
+                                already = bool(cl_round.get("ledger_applied", False))
+                                if st.button("장부반영", key="auc_apply_ledger_btn", use_container_width=True, disabled=already):
+                                    res = api_apply_auction_ledger(ADMIN_PIN, cl_round_id, refund_non_winners=refund_non_winners)
+                                    if res.get("ok"):
+                                        toast("경매 관리장부 + 국고 세입 반영 완료", icon="✅")
+                                        st.rerun()
+                                    else:
+                                        st.error(res.get("error", "장부 반영 실패"))
+                                if already:
+                                    st.caption("이미 장부 반영된 경매입니다.")
+                        else:
+                            st.info("제출된 입찰표가 없습니다.")
+                            
             st.markdown("### 📚 경매 관리 장부")
             led = api_list_auction_admin_ledger(limit=100)
             led_rows = list(led.get("rows", []) or [])
@@ -13507,3 +13515,4 @@ if "🎯 목표" in tabs and (not is_admin):
 
         if principal_all_running == 0 and interest_before_goal == 0:
             st.caption("진행 중 적금이 없어 예상 금액은 통장 잔액과 같아요.")
+            
