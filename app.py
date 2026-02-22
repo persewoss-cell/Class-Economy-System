@@ -12908,7 +12908,7 @@ if "🍀 복권" in tabs:
             if current_round_id:
                 current_round_id_str = str(current_round_id)
                 submitted_round_id = str(st.session_state.get("lottery_winners_visible_round_id", "") or "")
-                show_winner_result = submitted_round_id == current_round_id_st
+                show_winner_result = submitted_round_id == current_round_id_str
                 
                 r_snap = db.collection("lottery_rounds").document(current_round_id).get()
                 r_dat = r_snap.to_dict() if r_snap.exists else {}
