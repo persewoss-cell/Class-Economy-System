@@ -12685,7 +12685,6 @@ if "🏷️ 경매" in tabs:
 
         else:
             st.markdown("### 📝 입찰표")
-            st.markdown("### ✋경매 참여하기")
             if not open_round:
                 st.info("개시된 경매가 없습니다.")
             else:
@@ -12700,6 +12699,10 @@ if "🏷️ 경매" in tabs:
                 st.write(f"- 입찰이름: {str(open_round.get('bid_name', '') or '')}")
                 st.write(f"- 입찰자 정보: 번호 {my_no_v} / 이름 {my_name_v} / 소속 {str(open_round.get('affiliation', '') or '')}")
 
+            st.markdown("### ✋경매 참여하기")
+            if not open_round:
+                st.info("개시된 경매가 없습니다.")
+            else:
                 bid_doc_id = f"{str(open_round.get('round_id', '') or '')}_{sid}"
                 prev_bid = db.collection("auction_bids").document(bid_doc_id).get() if sid else None
                 if prev_bid and prev_bid.exists:
