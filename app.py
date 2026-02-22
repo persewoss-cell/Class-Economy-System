@@ -912,10 +912,15 @@ def _calc_invest_redeem_projection(invest_amount: int, buy_price: float, sell_pr
     투자 회수(지급)와 동일한 기준으로 현재 평가/예상 회수금 계산.
     return: (등락폭, 수익/손실, 회수예상금[int])
     """
+    def _as_price1_local(v):
+        try:
+            return float(f"{float(v):.1f}")
+        except Exception:
+            return 0.0
     invest_amount = int(invest_amount or 0)
-    buy_price = _as_price1(buy_price)
-    sell_price = _as_price1(sell_price)
-    diff = _as_price1(sell_price - buy_price)
+    buy_price = _as_price1_local(buy_price)
+    sell_price = _as_price1_local(sell_price)
+    diff = _as_price1_local(sell_price - buy_price)
 
     # diff <= -100 : 전액 손실
     if diff <= -100:
