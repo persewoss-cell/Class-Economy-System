@@ -27,6 +27,10 @@ KST = timezone(timedelta(hours=9))
 ADMIN_PIN = "9999"
 ADMIN_NAME = "관리자"
 
+# 신용등급 미반영 학생도 기본 기능(은행/경매/복권)을 바로 사용하도록 기본값 고정
+DEFAULT_CREDIT_SCORE = 50
+DEFAULT_CREDIT_GRADE = 5
+
 # =========================
 # 모바일 UI CSS + 템플릿 정렬(촘촘) CSS
 # (너가 준 CSS 그대로)
@@ -644,8 +648,8 @@ except Exception as e:
 # Utils (너 코드 유지 + 권한 유틸 추가)
 # =========================
 def pin_ok(pin: str) -> bool:
-    return str(pin or "").isdigit() and len(str(pin or "")) == 4
-
+    return len(str(pin or "")) == 4
+    
 def toast(msg: str, icon: str = "✅"):
     if hasattr(st, "toast"):
         st.toast(msg, icon=icon)
@@ -892,15 +896,16 @@ def _get_invest_summary_by_student_id(student_id: str) -> tuple[str, int]:
         # 총합
         total_val = int(round(sum(v for v in per_prod_val.values())))
 
-        # 표시: 종목별(내림차순) 상위 3개만
-        items = sorted(per_prod_val.items(), key=lambda kv: kv[1], reverse=True)
+        # 표시: 종목명 오름차순, 개수 제한 없이 모두 표시
+        items = sorted(
+            per_prod_val.items(),
+            key=lambda kv: str(prod_map.get(kv[0], (kv[0], 0.0))[0] or kv[0]),
+        )
         shown = []
-        for pid, v in items[:3]:
+        for pid, v in items:
             pname = prod_map.get(pid, (pid, 0.0))[0]
             shown.append(f"{pname} {int(round(v))}드림")
         text = ", ".join(shown)
-        if len(items) > 3:
-            text += f" 외 {len(items)-3}개"
 
         return (text, total_val)
     except Exception:
@@ -972,17 +977,12 @@ def _get_invest_principal_by_student_id(student_id: str) -> tuple[str, int]:
 
         total_principal = int(sum(int(v) for v in per_prod_amt.values()))
 
-        # 표시: 종목별(내림차순) 최대 6개, 그 이상이면 상위 3개 + 외 n개
-        items = sorted(per_prod_amt.items(), key=lambda kv: kv[1], reverse=True)
+        # 표시: 종목명 오름차순, 개수 제한 없이 모두 표시
+        items = sorted(per_prod_amt.items(), key=lambda kv: str(prod_name.get(kv[0], kv[0]) or kv[0]))
 
         shown = []
-        if len(items) <= 6:
-            for pid, v in items:
-                shown.append(f"{prod_name.get(pid, pid)} {int(v)}드림")
-        else:
-            for pid, v in items[:3]:
-                shown.append(f"{prod_name.get(pid, pid)} {int(v)}드림")
-            shown.append(f"외 {len(items)-3}개")
+        for pid, v in items:
+            shown.append(f"{prod_name.get(pid, pid)} {int(v)}드림")
 
         return (", ".join(shown), total_principal)
 
@@ -1154,35 +1154,39 @@ def _safe_credit(student_id: str):
     ✅ (score, grade) 안전 조회
     - 가능하면 _calc_credit_score_for_student()로 즉시 계산(사용자 헤더에서도 동작)
     - 그래도 안되면 students 문서에 저장된 credit_score/credit_grade 사용
-    - 실패 시 (0, 0)
+    - 실패 시 기본값(50점/5등급)
     """
     try:
         if not student_id:
-            return (0, 0)
-
+            return (DEFAULT_CREDIT_SCORE, DEFAULT_CREDIT_GRADE)
+            
         f = globals().get("_calc_credit_score_for_student")
         if callable(f):
             out = f(str(student_id))
             # out이 (score, grade) 튜플인 경우
             if isinstance(out, (tuple, list)) and len(out) >= 2:
-                return (int(out[0] or 0), int(out[1] or 0))
+                sc = int(out[0] if out[0] is not None else DEFAULT_CREDIT_SCORE)
+                gr = int(out[1] if out[1] is not None else 0)
+                if gr <= 0:
+                    gr = int(_score_to_grade(sc))
+                return (sc, gr)
             # out이 score(int)만 오는 경우
             try:
-                sc = int(out or 0)
-                return (sc, int(globals().get("_score_to_grade")(sc) if callable(globals().get("_score_to_grade")) else 0))
+                sc = int(out if out is not None else DEFAULT_CREDIT_SCORE)
+                return (sc, int(globals().get("_score_to_grade")(sc) if callable(globals().get("_score_to_grade")) else DEFAULT_CREDIT_GRADE))
             except Exception:
                 pass
 
         # students 문서에 저장된 값 사용
         snap = db.collection("students").document(str(student_id)).get()
         if not snap.exists:
-            return (0, 0)
+            return (DEFAULT_CREDIT_SCORE, DEFAULT_CREDIT_GRADE)
         data = snap.to_dict() or {}
-        sc = int(data.get("credit_score", 0) or 0)
+        sc = int(data.get("credit_score", DEFAULT_CREDIT_SCORE) or DEFAULT_CREDIT_SCORE)
         gr = int(data.get("credit_grade", 0) or 0)
 
         # grade가 비어있는데 score는 있으면 grade 계산
-        if (gr == 0) and (sc != 0):
+        if gr <= 0:
             gfn = globals().get("_score_to_grade")
             if callable(gfn):
                 gr = int(gfn(sc))
@@ -1190,8 +1194,8 @@ def _safe_credit(student_id: str):
         return (sc, gr)
 
     except Exception:
-        return (0, 0)
-
+        return (DEFAULT_CREDIT_SCORE, DEFAULT_CREDIT_GRADE)
+        
 def _fmt_admin_one_line(
     no: int,
     name: str,
@@ -1313,7 +1317,7 @@ def _set_login_student_context_from_doc(doc):
         "student_id": str(doc.id),
         "name": str(data.get("name", "") or ""),
         "balance": int(data.get("balance", 0) or 0),
-        "credit_grade": int(data.get("credit_grade", 0) or 0),
+        "credit_grade": int(data.get("credit_grade", DEFAULT_CREDIT_GRADE) or DEFAULT_CREDIT_GRADE),
         "role_id": str(data.get("role_id", "") or ""),
         "extra_permissions": list(data.get("extra_permissions", []) or []),
     }
@@ -1795,8 +1799,8 @@ def api_create_account(name, pin):
     pin = (pin or "").strip()
     if not name:
         return {"ok": False, "error": "이름이 필요합니다."}
-    if not (pin.isdigit() and len(pin) == 4):
-        return {"ok": False, "error": "PIN은 4자리 숫자여야 합니다."}
+    if not pin_ok(pin):
+        return {"ok": False, "error": "PIN은 4자리여야 합니다."}
     if fs_get_student_doc_by_name(name):
         return {"ok": False, "error": "이미 존재하는 계정입니다."}
     db.collection("students").document().set(
@@ -1804,6 +1808,8 @@ def api_create_account(name, pin):
             "name": name,
             "pin": pin,
             "balance": 0,
+            "credit_score": DEFAULT_CREDIT_SCORE,
+            "credit_grade": DEFAULT_CREDIT_GRADE,            
             "is_active": True,
             "role_id": "",
             "created_at": firestore.SERVER_TIMESTAMP,
@@ -1832,9 +1838,9 @@ def api_change_pin_student(name: str, old_pin: str, new_pin: str):
     if not name:
         return {"ok": False, "error": "이름이 필요합니다."}
     if not pin_ok(old_pin):
-        return {"ok": False, "error": "기존 비밀번호는 4자리 숫자여야 합니다."}
+        return {"ok": False, "error": "기존 비밀번호는 4자리여야 합니다."}
     if not pin_ok(new_pin):
-        return {"ok": False, "error": "새 비밀번호는 4자리 숫자여야 합니다."}
+        return {"ok": False, "error": "새 비밀번호는 4자리여야 합니다."}
 
     doc = fs_auth_student(name, old_pin)  # ✅ 기존 PIN 인증
     if not doc:
@@ -2043,15 +2049,26 @@ def api_broker_deposit_by_student_id(actor_student_id: str, student_id: str, mem
 def api_get_txs_by_student_id(student_id: str, limit=200):
     if not student_id:
         return {"ok": False, "error": "student_id가 없습니다."}
-    q = (
-        db.collection("transactions")
-        .where(filter=FieldFilter("student_id", "==", student_id))
-        .order_by("created_at", direction=firestore.Query.DESCENDING)
-        .limit(int(limit))
-        .stream()
-    )
+    try:
+        q = (
+            db.collection("transactions")
+            .where(filter=FieldFilter("student_id", "==", student_id))
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .limit(int(limit))
+            .stream()
+        )
+        tx_docs = list(q)
+    except FailedPrecondition:
+        # 신규 배포 환경에서 복합 인덱스가 준비되지 않은 경우를 대비
+        fallback_q = (
+            db.collection("transactions")
+            .where(filter=FieldFilter("student_id", "==", student_id))
+            .stream()
+        )
+        tx_docs = list(fallback_q)
+        
     rows = []
-    for d in q:
+    for d in tx_docs:
         tx = d.to_dict() or {}
         created_dt_utc = _to_utc_datetime(tx.get("created_at"))
         amt = int(tx.get("amount", 0) or 0)
@@ -2068,6 +2085,9 @@ def api_get_txs_by_student_id(student_id: str, limit=200):
                 "balance_after": int(tx.get("balance_after", 0) or 0),
             }
         )
+
+    rows.sort(key=lambda x: x.get("created_at_utc") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    rows = rows[: int(limit)]
     return {"ok": True, "rows": rows}
 
 def api_get_balance(login_name, login_pin):
@@ -2077,8 +2097,8 @@ def api_get_balance(login_name, login_pin):
     data = student_doc.to_dict() or {}
 
     # ✅ 신용등급(없으면 0)
-    credit_grade = int(data.get("credit_grade", 0) or 0)
-
+    credit_grade = int(data.get("credit_grade", DEFAULT_CREDIT_GRADE) or DEFAULT_CREDIT_GRADE)
+    
     return {
         "ok": True,
         "balance": int(data.get("balance", 0) or 0),
@@ -2090,19 +2110,19 @@ def api_get_credit_grade_by_student_id(student_id: str) -> int:
     """
     ✅ 학생 신용등급 조회
     - 신용등급 탭에서 저장해둔 값을 students 문서의 credit_grade 필드로 사용한다고 가정
-    - 없으면 0등급으로 표시
+    - 없으면 기본 5등급으로 표시
     """
     try:
         if not student_id:
-            return 0
+            return DEFAULT_CREDIT_GRADE
         snap = db.collection("students").document(student_id).get()
         if not snap.exists:
-            return 0
+            return DEFAULT_CREDIT_GRADE
         data = snap.to_dict() or {}
-        return int(data.get("credit_grade", 0) or 0)
+        return int(data.get("credit_grade", DEFAULT_CREDIT_GRADE) or DEFAULT_CREDIT_GRADE)
     except Exception:
-        return 0
-
+        return DEFAULT_CREDIT_GRADE
+        
 # =========================
 # ✅ Deposit Approval (입금 승인) - NEW
 # - 컬렉션: deposit_requests
@@ -5159,9 +5179,9 @@ with st.sidebar:
         if not stu_name:
             st.error("이름(계정)을 입력해 주세요.")
         elif not pin_ok(old_pin):
-            st.error("기존 비밀번호는 4자리 숫자여야 해요.")
+            st.error("기존 비밀번호는 4자리여야 해요.")
         elif not pin_ok(new_pin1) or not pin_ok(new_pin2):
-            st.error("새 비밀번호는 4자리 숫자여야 해요.")
+            st.error("새 비밀번호는 4자리여야 해요.")
         elif new_pin1 != new_pin2:
             st.error("새 비밀번호와 확인이 일치하지 않습니다.")
         elif old_pin == new_pin1:
@@ -5184,14 +5204,14 @@ with st.sidebar:
     st.header("🔐 [관리자] 계정생성 / PIN변경 / 삭제")
 
     # ✅ 공통 입력(한 블록으로 통합)
-    admin_manage_pin = st.text_input("관리자 비밀번호(4자리)", type="password", key="admin_manage_pin").strip()
+    admin_manage_pin = st.text_input("관리자 비밀번호", type="password", key="admin_manage_pin").strip()
     manage_name = st.text_input("이름(계정)", key="manage_name").strip()
-    manage_pin = st.text_input("비밀번호(4자리 숫자)", type="password", key="manage_pin").strip()
-
+    manage_pin = st.text_input("비밀번호(4자리)", type="password", key="manage_pin").strip()
+    
     # ✅ 공통 체크(관리자 비번)
     def _admin_guard():
-        if not pin_ok(admin_manage_pin):
-            st.error("관리자 비밀번호는 4자리 숫자여야 해요.")
+        if not admin_manage_pin:
+            st.error("관리자 비밀번호를 입력해 주세요.")
             return False
         if not is_admin_pin(admin_manage_pin):
             st.error("관리자 비밀번호가 틀립니다.")
@@ -5207,7 +5227,7 @@ with st.sidebar:
         if not target_name:
             return {"ok": False, "error": "대상 이름을 입력해 주세요."}
         if not pin_ok(new_pin):
-            return {"ok": False, "error": "새 비밀번호는 4자리 숫자여야 합니다."}
+            return {"ok": False, "error": "새 비밀번호는 4자리여야 합니다."}
 
         doc = fs_get_student_doc_by_name(target_name)
         if not doc:
@@ -5227,7 +5247,7 @@ with st.sidebar:
             if not manage_name:
                 st.error("이름을 입력해 주세요.")
             elif not pin_ok(manage_pin):
-                st.error("비밀번호는 4자리 숫자여야 해요. (예: 0123)")
+                st.error("비밀번호는 4자리여야 해요. (예: ab7@)")
             else:
                 # ✅ 새 계정은 '마지막 번호 + 1'로 저장 (students.no 사용)
                 if fs_get_student_doc_by_name(manage_name):
@@ -5251,6 +5271,8 @@ with st.sidebar:
                             "name": manage_name,
                             "pin": manage_pin,
                             "balance": 0,
+                            "credit_score": DEFAULT_CREDIT_SCORE,
+                            "credit_grade": DEFAULT_CREDIT_GRADE,                            
                             "is_active": True,
                             "role_id": "",
                             "io_enabled": True,
@@ -5273,7 +5295,7 @@ with st.sidebar:
             if not manage_name:
                 st.error("이름을 입력해 주세요.")
             elif not pin_ok(manage_pin):
-                st.error("새 비밀번호는 4자리 숫자여야 해요.")
+                st.error("새 비밀번호는 4자리여야 해요.")
             else:
                 res = api_admin_force_change_pin(admin_manage_pin, manage_name, manage_pin)
                 if res.get("ok"):
@@ -5301,7 +5323,7 @@ with st.sidebar:
                 if not manage_name:
                     st.error("삭제할 이름(계정)을 입력해 주세요.")
                 elif not pin_ok(manage_pin):
-                    st.error("비밀번호는 4자리 숫자여야 해요.")
+                    st.error("비밀번호는 4자리여야 해요.")
                 else:
                     # ✅ 여기서는 '해당 계정 PIN'이 아니라, '관리자 PIN'으로 삭제를 허용하려면
                     # api_delete_account가 (이름+PIN) 인증 구조라서 아래처럼 "관리자 강제 삭제"로 바꾸는 게 맞음.
@@ -5355,56 +5377,55 @@ if not st.session_state.logged_in:
         with login_c1:
             login_name = st.text_input("이름", key="login_name_input").strip()
         with login_c2:
-            login_pin = st.text_input("비밀번호(4자리)", type="password", key="login_pin_input").strip()
+            login_pin = st.text_input("비밀번호", type="password", key="login_pin_input").strip()
         with login_c3:
             login_btn = st.form_submit_button("로그인", use_container_width=True)
 
     if login_btn:
         if not login_name:
             st.error("이름을 입력해 주세요.")
-        elif not pin_ok(login_pin):
-            st.error("비밀번호는 4자리 숫자여야 해요.")
-        else:
-            if is_admin_login(login_name, login_pin):
-                st.session_state.admin_ok = True
-                st.session_state.logged_in = True
-                st.session_state.login_name = ADMIN_NAME
-                st.session_state.login_pin = ADMIN_PIN
-                st.session_state["login_student_ctx"] = {}
-                # ✅ 이름 저장 처리
-                try:
-                    if bool(st.session_state.get("remember_name_check", False)):
-                        st.query_params["saved_name"] = login_name
-                        st.query_params["remember"] = "1"
-                    else:
-                        st.query_params.pop("saved_name", None)
-                        st.query_params.pop("remember", None)
-                except Exception:
-                    pass
-                toast("관리자 모드 ON", icon="🔓")
-                st.rerun()
-            else:
-                doc = fs_auth_student(login_name, login_pin)
-                if not doc:
-                    st.error("이름 또는 비밀번호가 틀립니다.")
+        elif is_admin_login(login_name, login_pin):
+            st.session_state.admin_ok = True
+            st.session_state.logged_in = True
+            st.session_state.login_name = ADMIN_NAME
+            st.session_state.login_pin = ADMIN_PIN
+            st.session_state["login_student_ctx"] = {}
+            # ✅ 이름 저장 처리
+            try:
+                if bool(st.session_state.get("remember_name_check", False)):
+                    st.query_params["saved_name"] = login_name
+                    st.query_params["remember"] = "1"
                 else:
-                    st.session_state.admin_ok = False
-                    st.session_state.logged_in = True
-                    st.session_state.login_name = login_name
-                    st.session_state.login_pin = login_pin
-                    _set_login_student_context_from_doc(doc)
-                # ✅ 이름 저장 처리
-                try:
-                    if bool(st.session_state.get("remember_name_check", False)):
-                        st.query_params["saved_name"] = login_name
-                        st.query_params["remember"] = "1"
-                    else:
-                        st.query_params.pop("saved_name", None)
-                        st.query_params.pop("remember", None)
-                except Exception:
-                    pass
-                toast("로그인 완료!", icon="✅")
-                st.rerun()
+                    st.query_params.pop("saved_name", None)
+                    st.query_params.pop("remember", None)
+            except Exception:
+                pass
+            toast("관리자 모드 ON", icon="🔓")
+            st.rerun()
+        elif not pin_ok(login_pin):
+            st.error("학생 비밀번호는 4자리여야 해요.")
+        else:
+            doc = fs_auth_student(login_name, login_pin)
+            if not doc:
+                st.error("이름 또는 비밀번호가 틀립니다.")
+            else:
+                st.session_state.admin_ok = False
+                st.session_state.logged_in = True
+                st.session_state.login_name = login_name
+                st.session_state.login_pin = login_pin
+                _set_login_student_context_from_doc(doc)
+            # ✅ 이름 저장 처리
+            try:
+                if bool(st.session_state.get("remember_name_check", False)):
+                    st.query_params["saved_name"] = login_name
+                    st.query_params["remember"] = "1"
+                else:
+                    st.query_params.pop("saved_name", None)
+                    st.query_params.pop("remember", None)
+            except Exception:
+                pass
+            toast("로그인 완료!", icon="✅")
+            st.rerun()
 
 else:
     if st.button("로그아웃", key="logout_btn", use_container_width=True):
@@ -5709,8 +5730,8 @@ def refresh_account_data_light(name: str, pin: str, force: bool = False):
 
     balance = int(bal_res["balance"])
     student_id = bal_res.get("student_id")
-    credit_grade = int(bal_res.get("credit_grade", 0) or 0)
-
+    credit_grade = int(bal_res.get("credit_grade", DEFAULT_CREDIT_GRADE) or DEFAULT_CREDIT_GRADE)
+    
     tx_res = api_get_txs_by_student_id(student_id, limit=300)
     if not tx_res.get("ok"):
         st.session_state.data[name] = {"error": tx_res.get("error", "내역 로드 실패"), "ts": now}
@@ -6241,7 +6262,7 @@ if "🏦 내 통장" in tabs:
                 sample_df = pd.DataFrame(
                     [
                         {"내역이름": "대여료", "구분": "구입", "종류": "출금", "금액": 100, "순서": 1},
-                        {"내역이름": "칭찬스티커", "구분": "보상", "종류": "입금", "금액": 10, "순서": 2},
+                        {"내역이름": "발표", "구분": "보상", "종류": "입금", "금액": 10, "순서": 2},
                         {"내역이름": "지각", "구분": "벌금", "종류": "출금", "금액": 20, "순서": 3},
                         {"내역이름": "기타", "구분": "없음", "종류": "입금", "금액": 5, "순서": 4},
                     ],
@@ -7189,7 +7210,7 @@ if "admin::🏦 내 통장" in tabs:
                 sample_df = pd.DataFrame(
                     [
                         {"내역이름": "대여료", "구분": "구입", "종류": "출금", "금액": 100, "순서": 1},
-                        {"내역이름": "칭찬스티커", "구분": "보상", "종류": "입금", "금액": 10, "순서": 2},
+                        {"내역이름": "발표", "구분": "보상", "종류": "입금", "금액": 10, "순서": 2},
                         {"내역이름": "지각", "구분": "벌금", "종류": "출금", "금액": 20, "순서": 3},
                         {"내역이름": "기타", "구분": "없음", "종류": "입금", "금액": 5, "순서": 4},
                     ],
@@ -9546,8 +9567,8 @@ if "👥 계정 정보/활성화" in tabs:
         import io
         sample_df = pd.DataFrame(
             [
-                {"번호": 1, "이름": "홍길동", "비밀번호": "1234", "입출금활성화": True, "투자활성화": True},
-                {"번호": 2, "이름": "김철수", "비밀번호": "2345", "입출금활성화": True, "투자활성화": False},
+                {"번호": 1, "이름": "홍길동", "비밀번호": "12a#"},
+                {"번호": 2, "이름": "김철수", "비밀번호": "ab@9"},
             ]
         )
         bio = io.BytesIO()
@@ -9632,6 +9653,8 @@ if "👥 계정 정보/활성화" in tabs:
                                 {
                                     **payload,
                                     "balance": 0,
+                                    "credit_score": DEFAULT_CREDIT_SCORE,
+                                    "credit_grade": DEFAULT_CREDIT_GRADE,                            
                                     "role_id": "",
                                     "created_at": firestore.SERVER_TIMESTAMP,
                                 }
@@ -9670,7 +9693,7 @@ if "👥 계정 정보/활성화" in tabs:
                 }
             )
 
-        df_all = pd.DataFrame(rows)
+        df_all = pd.DataFrame(rows, columns=["_sid", "선택", "번호", "이름", "비밀번호"])
         if not df_all.empty:
             df_all = df_all.sort_values(["번호", "이름"], ascending=[True, True], kind="mergesort").reset_index(drop=True)
 
@@ -9766,7 +9789,13 @@ if "👥 계정 정보/활성화" in tabs:
             for col in ["선택", "번호", "이름", "비밀번호"]:
                 if col in edited_view.columns and col in tmp.columns:
                     tmp[col] = edited_view[col].values
-            tmp = tmp.sort_values(["번호", "이름"], ascending=[True, True], kind="mergesort").reset_index(drop=True)
+            sort_cols = [c for c in ["번호", "이름"] if c in tmp.columns]
+            if sort_cols:
+                tmp = tmp.sort_values(
+                    sort_cols,
+                    ascending=[True] * len(sort_cols),
+                    kind="mergesort",
+                ).reset_index(drop=True)
             st.session_state.account_df = tmp
 
 # =========================
@@ -10716,8 +10745,8 @@ if "💼 직업/월급" in tabs:
         # ✅ 샘플 엑셀 다운로드  (※ 실수령은 자동 계산이므로 컬럼에서 제거)
         sample_df = pd.DataFrame(
             [
-                {"순": 1, "직업": "반장", "월급": 500, "학생 수": 1},
-                {"순": 2, "직업": "서기", "월급": 300, "학생 수": 2},
+                {"순": 1, "직업": "은행원", "월급": 500, "학생 수": 1},
+                {"순": 2, "직업": "통계청", "월급": 300, "학생 수": 2},
             ],
             columns=["순", "직업", "월급", "학생 수"],
         )
@@ -11485,7 +11514,6 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
                         picked = st.radio(
                             label="",
                             options=("O", "X", "△"),
-                            index=("O", "X", "△").index(st.session_state[cell_key]),
                             horizontal=True,
                             key=cell_key,
                             label_visibility="collapsed",
@@ -11579,9 +11607,9 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
 if "💳 신용등급" in tabs:
     with tab_map["💳 신용등급"]:
 
-        if not (is_admin or has_tab_access(my_perms, "💳 신용등급", is_admin)):
+        credit_tab_access = bool(is_admin or has_tab_access(my_perms, "💳 신용등급", is_admin))
+        if not credit_tab_access:
             st.info("접근 권한이 없습니다.")
-            st.stop()
 
         # -------------------------
         # 0) 학생 목록(번호/이름) : 계정정보 탭과 동일(활성 학생)
@@ -11599,9 +11627,9 @@ if "💳 신용등급" in tabs:
                 stu_rows.append({"student_id": d.id, "no": no, "name": nm})
         stu_rows.sort(key=lambda r: (r["no"], r["name"]))
 
-        if not stu_rows:
+        has_students = bool(stu_rows)
+        if credit_tab_access and (not has_students):
             st.info("활성화된 학생(계정)이 없습니다.")
-            st.stop()
 
         # -------------------------
         # 2) 점수 계산 설정(기본값)
@@ -11657,270 +11685,270 @@ if "💳 신용등급" in tabs:
         sub_res = api_list_stat_submissions_cached(limit_cols=60)
         sub_rows_all = sub_res.get("rows", []) if sub_res.get("ok") else []
 
-        if not sub_rows_all:
+        if credit_tab_access and has_students and (not sub_rows_all):
             st.info("통계청 제출물 내역이 없습니다. 먼저 통계청 탭에서 제출물을 추가하세요.")
-            st.stop()
-
-        # API가 내려주는 "원래 순서"를 표시용 최신순으로 사용 (가장 안정적)
-        # - sub_rows_desc: 최신 → 오래된 (표시용)
-        # - sub_rows_asc : 오래된 → 최신 (누적 계산용)
-        sub_rows_desc = list(sub_rows_all)            # ✅ 그대로(최신→과거라고 가정)
-        sub_rows_asc  = list(reversed(sub_rows_desc)) # ✅ 누적 계산은 과거→최신
-
-        base = int(credit_cfg.get("base", 50) if credit_cfg.get("base", None) is not None else 50)
-        o_pt = int(credit_cfg.get("o", 1) if credit_cfg.get("o", None) is not None else 1)
-        x_pt = int(credit_cfg.get("x", -3) if credit_cfg.get("x", None) is not None else -3)
-        tri_pt = int(credit_cfg.get("tri", 0) if credit_cfg.get("tri", None) is not None else 0)
-
-        def _norm_status(v) -> str:
-            """상태값을 무조건 'O' / 'X' / '△' 중 하나로 강제"""
-            v = str(v or "").strip().upper()
-            if v in ("O", "○"):
-                return "O"
-            if v in ("△", "▲", "Δ"):
-                return "△"
-            return "X"
-
-        def _delta(v) -> int:
-            v = _norm_status(v)
-            if v == "O":
-                return o_pt
-            if v == "△":
-                return tri_pt
-            return x_pt
-
-        # 학생별 누적 점수 스냅샷: scores_by_sub[sub_id][student_id] = score_after
-        scores_by_sub = {}  # submission_id -> {student_id: score}
-        cur_score = {str(s["student_id"]): int(base) for s in stu_rows}
-
-        for sub in sub_rows_asc:
-            sub_id = str(sub.get("submission_id") or "")
-            if not sub_id:
-                continue
-            statuses = dict(sub.get("statuses", {}) or {})
-            snap_map = {}
-
-            for stx in stu_rows:
-                stid = str(stx["student_id"])
-                v_raw = statuses.get(stid, "X")  # 없으면 X
-                v = _norm_status(v_raw)
-                nxt = int(cur_score.get(stid, base) + _delta(v))
-                if nxt > 100:
-                    nxt = 100
-                if nxt < 0:
-                    nxt = 0
-                cur_score[stid] = nxt
-                snap_map[stid] = nxt
-
-            scores_by_sub[sub_id] = snap_map
-
-        # -------------------------
-        # (PATCH) 가로 페이징 (통계청과 동일 로직)
-        # 기준: credit_page_idx (0 = 최신 페이지)
-        # -------------------------
-        import math
-
-        VISIBLE_COLS = 7
-        total_cols = len(sub_rows_desc)
-        total_pages = max(1, int(math.ceil(total_cols / VISIBLE_COLS)))
-
-        if "credit_page_idx" not in st.session_state:
-            st.session_state["credit_page_idx"] = 0  # ✅ 최신 페이지
-
-        # page_idx 안전 보정
-        st.session_state["credit_page_idx"] = max(
-            0,
-            min(int(st.session_state["credit_page_idx"]), total_pages - 1),
-        )
-        page_idx = int(st.session_state["credit_page_idx"])
-        cur_page = page_idx + 1  # 1-based
-
-        def _credit_goto_page(p: int):
-            p = max(1, min(int(p), total_pages))
-            st.session_state["credit_page_idx"] = p - 1
-            st.rerun()
-
-        def _page_items(cur: int, last: int):
-            if last <= 9:
-                return list(range(1, last + 1))
-            items = [1]
-            left = max(2, cur - 1)
-            right = min(last - 1, cur + 1)
-            if left > 2:
-                items.append("…")
-            items.extend(range(left, right + 1))
-            if right < last - 1:
-                items.append("…")
-            items.append(last)
-            out = []
-            for x in items:
-                if not out or out[-1] != x:
-                    out.append(x)
-            return out
-
-        # -------------------------
-        # 네비게이션 UI
-        # -------------------------
-        st.markdown("### 🌟 신용등급 관리 장부")
-        
-        nav = st.columns([1, 1, 1, 1], gap="small")
-
-        with nav[0]:
-            if st.button(
-                "◀",
-                key="credit_nav_left",
-                use_container_width=True,
-                disabled=(cur_page <= 1),
-            ):
-                _credit_goto_page(cur_page - 1)
-
-        with nav[1]:
-            page_val = st.number_input(
-                "",
-                min_value=1,
-                max_value=total_pages,
-                value=cur_page,
-                step=1,
-                key="credit_page_num",
-                label_visibility="collapsed",
+        if credit_tab_access and has_students and sub_rows_all:
+            # API가 내려주는 "원래 순서"를 표시용 최신순으로 사용 (가장 안정적)
+            # - sub_rows_desc: 최신 → 오래된 (표시용)
+            # - sub_rows_asc : 오래된 → 최신 (누적 계산용)
+            sub_rows_desc = list(sub_rows_all)            # ✅ 그대로(최신→과거라고 가정)
+            sub_rows_asc  = list(reversed(sub_rows_desc)) # ✅ 누적 계산은 과거→최신
+    
+            base = int(credit_cfg.get("base", 50) if credit_cfg.get("base", None) is not None else 50)
+            o_pt = int(credit_cfg.get("o", 1) if credit_cfg.get("o", None) is not None else 1)
+            x_pt = int(credit_cfg.get("x", -3) if credit_cfg.get("x", None) is not None else -3)
+            tri_pt = int(credit_cfg.get("tri", 0) if credit_cfg.get("tri", None) is not None else 0)
+    
+            def _norm_status(v) -> str:
+                """상태값을 무조건 'O' / 'X' / '△' 중 하나로 강제"""
+                v = str(v or "").strip().upper()
+                if v in ("O", "○"):
+                    return "O"
+                if v in ("△", "▲", "Δ"):
+                    return "△"
+                return "X"
+    
+            def _delta(v) -> int:
+                v = _norm_status(v)
+                if v == "O":
+                    return o_pt
+                if v == "△":
+                    return tri_pt
+                return x_pt
+    
+            # 학생별 누적 점수 스냅샷: scores_by_sub[sub_id][student_id] = score_after
+            scores_by_sub = {}  # submission_id -> {student_id: score}
+            cur_score = {str(s["student_id"]): int(base) for s in stu_rows}
+    
+            for sub in sub_rows_asc:
+                sub_id = str(sub.get("submission_id") or "")
+                if not sub_id:
+                    continue
+                statuses = dict(sub.get("statuses", {}) or {})
+                snap_map = {}
+    
+                for stx in stu_rows:
+                    stid = str(stx["student_id"])
+                    v_raw = statuses.get(stid, "X")  # 없으면 X
+                    v = _norm_status(v_raw)
+                    nxt = int(cur_score.get(stid, base) + _delta(v))
+                    if nxt > 100:
+                        nxt = 100
+                    if nxt < 0:
+                        nxt = 0
+                    cur_score[stid] = nxt
+                    snap_map[stid] = nxt
+    
+                scores_by_sub[sub_id] = snap_map
+    
+            # -------------------------
+            # (PATCH) 가로 페이징 (통계청과 동일 로직)
+            # 기준: credit_page_idx (0 = 최신 페이지)
+            # -------------------------
+            import math
+    
+            VISIBLE_COLS = 7
+            total_cols = len(sub_rows_desc)
+            total_pages = max(1, int(math.ceil(total_cols / VISIBLE_COLS)))
+    
+            if "credit_page_idx" not in st.session_state:
+                st.session_state["credit_page_idx"] = 0  # ✅ 최신 페이지
+    
+            # page_idx 안전 보정
+            st.session_state["credit_page_idx"] = max(
+                0,
+                min(int(st.session_state["credit_page_idx"]), total_pages - 1),
             )
-            if int(page_val) != int(cur_page):
-                _credit_goto_page(int(page_val))
-
-        with nav[2]:
-            st.markdown(
-                f"<div style='text-align:center; font-weight:700; padding-top:6px;'>/ 전체페이지 {total_pages}</div>",
-                unsafe_allow_html=True,
-            )
-
-        with nav[3]:
-            if st.button(
-                "▶",
-                key="credit_nav_right",
-                use_container_width=True,
-                disabled=(cur_page >= total_pages),
-            ):
-                _credit_goto_page(cur_page + 1)
-
-        # -------------------------
-        # ✅ page_idx 기준으로 날짜 컬럼 슬라이스
-        # -------------------------
-        start = page_idx * VISIBLE_COLS
-        end = start + VISIBLE_COLS
-        sub_rows_view = sub_rows_desc[start:end]
-
-        # ---- 헤더(날짜 + 제출물 내역 2줄) ----
-        hdr_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
-        with hdr_cols[0]:
-            st.markdown("**번호**")
-        with hdr_cols[1]:
-            st.markdown("**이름**")
-
-        for j, s in enumerate(sub_rows_view):
-            with hdr_cols[j + 2]:
-                date_disp = str(s.get("date_display", "") or "").strip()
-                if not date_disp:
-                    date_disp = _fmt_kor_date_short(s.get("created_at_utc", ""))
-
-                lab = str(s.get("label", "") or "").strip()
-
+            page_idx = int(st.session_state["credit_page_idx"])
+            cur_page = page_idx + 1  # 1-based
+    
+            def _credit_goto_page(p: int):
+                p = max(1, min(int(p), total_pages))
+                st.session_state["credit_page_idx"] = p - 1
+                st.rerun()
+    
+            def _page_items(cur: int, last: int):
+                if last <= 9:
+                    return list(range(1, last + 1))
+                items = [1]
+                left = max(2, cur - 1)
+                right = min(last - 1, cur + 1)
+                if left > 2:
+                    items.append("…")
+                items.extend(range(left, right + 1))
+                if right < last - 1:
+                    items.append("…")
+                items.append(last)
+                out = []
+                for x in items:
+                    if not out or out[-1] != x:
+                        out.append(x)
+                return out
+    
+            # -------------------------
+            # 네비게이션 UI
+            # -------------------------
+            st.markdown("### 🌟 신용등급 관리 장부")
+            
+            nav = st.columns([1, 1, 1, 1], gap="small")
+    
+            with nav[0]:
+                if st.button(
+                    "◀",
+                    key="credit_nav_left",
+                    use_container_width=True,
+                    disabled=(cur_page <= 1),
+                ):
+                    _credit_goto_page(cur_page - 1)
+    
+            with nav[1]:
+                page_val = st.number_input(
+                    "",
+                    min_value=1,
+                    max_value=total_pages,
+                    value=cur_page,
+                    step=1,
+                    key="credit_page_num",
+                    label_visibility="collapsed",
+                )
+                if int(page_val) != int(cur_page):
+                    _credit_goto_page(int(page_val))
+    
+            with nav[2]:
                 st.markdown(
-                    f"<div style='text-align:center; font-weight:900; line-height:1.15;'>"
-                    f"{date_disp}<br>{lab}"
-                    f"</div>",
+                    f"<div style='text-align:center; font-weight:700; padding-top:6px;'>/ 전체페이지 {total_pages}</div>",
                     unsafe_allow_html=True,
                 )
-
-        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-
-        # ---- 본문(학생별) ----
-        for stx in stu_rows:
-            stid = str(stx["student_id"])
-            no = int(stx["no"])
-            nm = stx["name"]
-
-            row_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
-            with row_cols[0]:
-                st.markdown(str(no))
-            with row_cols[1]:
-                st.markdown(str(nm))
-
-            for j, sub in enumerate(sub_rows_view):
-                sub_id = str(sub.get("submission_id") or "")
-                if sub_id and sub_id in scores_by_sub:
-                    sc = int(scores_by_sub[sub_id].get(stid, base))
-                else:
-                    sc = int(base)
-
-                gr = _score_to_grade(sc)
-
-                with row_cols[j + 2]:
+    
+            with nav[3]:
+                if st.button(
+                    "▶",
+                    key="credit_nav_right",
+                    use_container_width=True,
+                    disabled=(cur_page >= total_pages),
+                ):
+                    _credit_goto_page(cur_page + 1)
+    
+            # -------------------------
+            # ✅ page_idx 기준으로 날짜 컬럼 슬라이스
+            # -------------------------
+            start = page_idx * VISIBLE_COLS
+            end = start + VISIBLE_COLS
+            sub_rows_view = sub_rows_desc[start:end]
+    
+            # ---- 헤더(날짜 + 제출물 내역 2줄) ----
+            hdr_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
+            with hdr_cols[0]:
+                st.markdown("**번호**")
+            with hdr_cols[1]:
+                st.markdown("**이름**")
+    
+            for j, s in enumerate(sub_rows_view):
+                with hdr_cols[j + 2]:
+                    date_disp = str(s.get("date_display", "") or "").strip()
+                    if not date_disp:
+                        date_disp = _fmt_kor_date_short(s.get("created_at_utc", ""))
+    
+                    lab = str(s.get("label", "") or "").strip()
+    
                     st.markdown(
-                        f"<div style='text-align:center; font-weight:900;'>{sc}점/{gr}등급</div>",
+                        f"<div style='text-align:center; font-weight:900; line-height:1.15;'>"
+                        f"{date_disp}<br>{lab}"
+                        f"</div>",
                         unsafe_allow_html=True,
                     )
 
-
-        # -------------------------
-        # 1) 점수/등급 규칙표(1~10등급)
-        # -------------------------
-        st.markdown("### 📌 신용등급 구분표")
-        st.markdown(
-            """
-<style>
-.credit-band { border:1px solid #ddd; border-radius:12px; overflow:hidden; }
-.credit-band table { width:100%; border-collapse:collapse; font-weight:700; }
-.credit-band th, .credit-band td { border-right:1px solid #ddd; padding:10px 6px; text-align:center; }
-.credit-band th:last-child, .credit-band td:last-child { border-right:none; }
-.credit-band th { background:#f3f4f6; }
-</style>
-<div class="credit-band">
-  <table>
-    <tr>
-      <th>1등급</th><th>2등급</th><th>3등급</th><th>4등급</th><th>5등급</th>
-      <th>6등급</th><th>7등급</th><th>8등급</th><th>9등급</th><th>10등급</th>
-    </tr>
-    <tr>
-      <td>90이상</td><td>80-89</td><td>70-79</td><td>60-69</td><td>50-59</td>
-      <td>40-49</td><td>30-39</td><td>20-29</td><td>10-19</td><td>0-9</td>
-    </tr>
-  </table>
-</div>
-""",
-            unsafe_allow_html=True,
-        )
-
-        def _score_to_grade(score: int) -> int:
-            s = int(score)
-            if s >= 90:
-                return 1
-            if s >= 80:
-                return 2
-            if s >= 70:
-                return 3
-            if s >= 60:
-                return 4
-            if s >= 50:
-                return 5
-            if s >= 40:
-                return 6
-            if s >= 30:
-                return 7
-            if s >= 20:
-                return 8
-            if s >= 10:
-                return 9
-            return 10
-
-        def _fmt_kor_date_short(iso_utc: str) -> str:
-            # "0월 0일(요일한글자)" 형태
-            try:
-                # 예: 2026-02-07T00:00:00Z
-                dt = datetime.fromisoformat(str(iso_utc).replace("Z", "+00:00")).astimezone(KST)
-                wd = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
-                return f"{dt.month}월 {dt.day}일({wd})"
-            except Exception:
-                return ""
+            
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    
+            # ---- 본문(학생별) ----
+            for stx in stu_rows:
+                stid = str(stx["student_id"])
+                no = int(stx["no"])
+                nm = stx["name"]
+    
+                row_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
+                with row_cols[0]:
+                    st.markdown(str(no))
+                with row_cols[1]:
+                    st.markdown(str(nm))
+    
+                for j, sub in enumerate(sub_rows_view):
+                    sub_id = str(sub.get("submission_id") or "")
+                    if sub_id and sub_id in scores_by_sub:
+                        sc = int(scores_by_sub[sub_id].get(stid, base))
+                    else:
+                        sc = int(base)
+    
+                    gr = _score_to_grade(sc)
+    
+                    with row_cols[j + 2]:
+                        st.markdown(
+                            f"<div style='text-align:center; font-weight:900;'>{sc}점/{gr}등급</div>",
+                            unsafe_allow_html=True,
+                        )
+    
+    
+            # -------------------------
+            # 1) 점수/등급 규칙표(1~10등급)
+            # -------------------------
+            st.markdown("### 📌 신용등급 구분표")
+            st.markdown(
+                """
+    <style>
+    .credit-band { border:1px solid #ddd; border-radius:12px; overflow:hidden; }
+    .credit-band table { width:100%; border-collapse:collapse; font-weight:700; }
+    .credit-band th, .credit-band td { border-right:1px solid #ddd; padding:10px 6px; text-align:center; }
+    .credit-band th:last-child, .credit-band td:last-child { border-right:none; }
+    .credit-band th { background:#f3f4f6; }
+    </style>
+    <div class="credit-band">
+      <table>
+        <tr>
+          <th>1등급</th><th>2등급</th><th>3등급</th><th>4등급</th><th>5등급</th>
+          <th>6등급</th><th>7등급</th><th>8등급</th><th>9등급</th><th>10등급</th>
+        </tr>
+        <tr>
+          <td>90이상</td><td>80-89</td><td>70-79</td><td>60-69</td><td>50-59</td>
+          <td>40-49</td><td>30-39</td><td>20-29</td><td>10-19</td><td>0-9</td>
+        </tr>
+      </table>
+    </div>
+    """,
+                unsafe_allow_html=True,
+            )
+    
+            def _score_to_grade(score: int) -> int:
+                s = int(score)
+                if s >= 90:
+                    return 1
+                if s >= 80:
+                    return 2
+                if s >= 70:
+                    return 3
+                if s >= 60:
+                    return 4
+                if s >= 50:
+                    return 5
+                if s >= 40:
+                    return 6
+                if s >= 30:
+                    return 7
+                if s >= 20:
+                    return 8
+                if s >= 10:
+                    return 9
+                return 10
+    
+            def _fmt_kor_date_short(iso_utc: str) -> str:
+                # "0월 0일(요일한글자)" 형태
+                try:
+                    # 예: 2026-02-07T00:00:00Z
+                    dt = datetime.fromisoformat(str(iso_utc).replace("Z", "+00:00")).astimezone(KST)
+                    wd = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
+                    return f"{dt.month}월 {dt.day}일({wd})"
+                except Exception:
+                    return ""
 
 
 # =========================
